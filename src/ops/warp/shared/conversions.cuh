@@ -7,7 +7,7 @@ namespace kittens {
 
 /* ----------  COPIES  ---------- */
 
-template<typename T, typename U, int _height, int _width, st_layout L1, st_layout L2>
+template<typename T, typename U, int _height, int _width, ducks::st_layout::all L1, ducks::st_layout::all L2>
 __device__ static inline void copy(st<T, _height, _width, L1> &dst, const st<U, _height, _width, L2> &src) {
     using T2 = base_types::packing<T>::packed_type;
     using U2 = base_types::packing<U>::packed_type;
@@ -26,6 +26,15 @@ __device__ static inline void copy(st<T, _height, _width, L1> &dst, const st<U, 
             dst[{row, col}] = base_types::convertor<T, U>::convert(src[{row, col}]);
         }
     }
+}
+
+/* ----------  SUBTILE  ---------- */
+
+template<int subtile_height, int subtile_width, ducks::st::all ST>
+__device__ inline typename ST::subtile<subtile_height, subtile_width> subtile_inplace(ST &src, int tile_row_offset, int tile_col_offset) {
+    return typename ST::subtile<subtile_height, subtile_width>(
+        &src[0], subtile_height*16*tile_row_offset, subtile_width*16*tile_col_offset
+    );
 }
 
 }

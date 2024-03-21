@@ -1,4 +1,5 @@
 #pragma once
 
-#include "st_layouts.cuh"
+#include "st_layout.cuh"
+#include "sv.cuh"
 #include "st.cuh"

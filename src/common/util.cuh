@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <type_traits>
+#include <concepts>
 #include <memory>
 
 namespace kittens {
@@ -24,19 +25,6 @@ constexpr int MAX_SHARED_MEMORY = 164000;
 #elif KITTENS_4090
 constexpr int MAX_SHARED_MEMORY = 101000;
 #endif
-
-/* ----------  DEFAULT TYPE  ---------- */
-
-struct default_type {};
-
-/* ----------  BOOL TYPE UTILS  ---------- */
-
-template<typename T>
-concept bool_type = std::is_same_v<T, std::true_type> || std::is_same_v<T, std::false_type>;
-
-// turns out to be a useful alias for swapping layouts
-template<bool_type B> struct not_type      { using type = std::true_type;  };
-template<> struct not_type<std::true_type> { using type = std::false_type; };
 
 /* ----------  SHUFFLE UTILS  ---------- */
 
@@ -74,33 +62,48 @@ struct shared_allocator {
     private:
         __device__ shared_allocator(int *_ptr): ptr(_ptr) {}
 
+        // Recursive template to generate N-dimensional array type
+        template<typename A, size_t... dims>
+        struct variadic_array;
+        template<typename A, size_t first_dim, size_t... rest_dims>
+        struct variadic_array<A, first_dim, rest_dims...> {
+            using type = typename variadic_array<A[first_dim], rest_dims...>::type;
+        };
+        template<typename A>
+        struct variadic_array<A> {
+            using type = A;
+        };
+        template<typename A, size_t... dims> using variadic_array_t = typename variadic_array<A, dims...>::type;
+
     public:
         __device__ inline static shared_allocator create_allocator(int *_ptr) {
             shared_allocator sa(_ptr); 
             return sa;
         }
+        template<int alignment=128>
         __device__ inline static shared_allocator create_allocator_tma(int *_ptr) {
             shared_allocator sa(_ptr); 
             uint64_t p = reinterpret_cast<uint64_t>(sa.ptr);
-            sa.ptr = (int*)(p + (128-(p%128)));
+            sa.ptr = (int*)(p + (alignment-(p%alignment)));
             return sa;
         }
-        template<typename A> 
-        __device__ inline A& allocate() {
-            A*p = reinterpret_cast<A*>(ptr);
-            ptr += sizeof(A)/sizeof(int);
-            return *p;
-        }
-        template<typename A, size_t N> 
-        __device__ inline A (&allocate())[N] {
-            using at = A[N];
+        template<typename A, size_t... dims> 
+        __device__ inline variadic_array_t<A, dims...>& allocate() {
+            using at = variadic_array_t<A, dims...>;
             at*p = reinterpret_cast<at*>(ptr);
             ptr += sizeof(at)/sizeof(int);
             return *p;
         }
-        template<typename A, size_t N, size_t M> 
-        __device__ inline A (&allocate())[N][M] {
-            using at = A[N][M];
+        template<typename A, size_t N, size_t M, size_t L> 
+        __device__ inline A (&allocate())[N][M][L] {
+            using at = A[N][M][L];
+            at*p = reinterpret_cast<at*>(ptr);
+            ptr += sizeof(at)/sizeof(int);
+            return *p;
+        }
+        template<typename A, size_t N, size_t M, size_t L, size_t K> 
+        __device__ inline A (&allocate())[N][M][L][K] {
+            using at = A[N][M][L][K];
             at*p = reinterpret_cast<at*>(ptr);
             ptr += sizeof(at)/sizeof(int);
             return *p;

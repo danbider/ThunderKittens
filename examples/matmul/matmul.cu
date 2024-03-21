@@ -34,7 +34,7 @@ __global__ void matmul(bf16 *__a__, bf16 *__b__, bf16 *__c__, int N)
     extern __shared__ alignment_dummy __shm[];
     shared_allocator al = shared_allocator::create_allocator((int *)&__shm[0]);
 
-    typedef st_bf<8, 2, st_xor_row_layout> st_ab;
+    typedef st_bf<8, 2, ducks::st_layout::xor_swizzle> st_ab;
 
     st_ab(&st_a)[2] = al.allocate<st_ab, 2>();
     st_ab(&st_b)[2] = al.allocate<st_ab, 2>();
@@ -48,13 +48,13 @@ __global__ void matmul(bf16 *__a__, bf16 *__b__, bf16 *__c__, int N)
     __syncthreads();
 
     // 32 x 16 A
-    rt_bf<2, 1, rt_row_layout> a_reg;
+    rt_bf<2, 1, ducks::rt_layout::row> a_reg;
 
     // 128 x 16 B
-    rt_bf<8, 1, rt_row_layout> b_reg;
+    rt_bf<8, 1, ducks::rt_layout::row> b_reg;
 
     // 32 x 128 output
-    rt_fl<2, 8, rt_row_layout> c_reg;
+    rt_fl<2, 8, ducks::rt_layout::row> c_reg;
 
     int num_warps = blockDim.x / 32;
 
@@ -69,8 +69,12 @@ __global__ void matmul(bf16 *__a__, bf16 *__b__, bf16 *__c__, int N)
     auto b = __b__ + block_col * BLOCK_SIZE_N * N;
     auto c = __c__ + block_row * BLOCK_SIZE_N * N + block_col * BLOCK_SIZE_N;
 
-    auto subtile_a = st_a[tic].template subtile<2, 2>(warpid(), 0);
-    auto subtile_b = st_b[tic].template subtile<2, 2>(warpid(), 0);
+    // subtile_inplace<2, 1>(st_a[tic], warpid(), k);
+    auto subtile_a = subtile_inplace<2, 2>(st_a[tic], warpid(), 0);
+    auto subtile_b = subtile_inplace<2, 2>(st_b[tic], warpid(), 0);
+
+    // auto subtile_a = st_a[tic].template subtile<2, 2>(warpid(), 0);
+    // auto subtile_b = st_b[tic].template subtile<2, 2>(warpid(), 0);
 
     auto ab_offset = rows_per_warp * warpid() * N;
 
@@ -79,7 +83,7 @@ __global__ void matmul(bf16 *__a__, bf16 *__b__, bf16 *__c__, int N)
 
     // now iterate through A, B
     const int accum_blocks = N / BLOCK_SIZE_K;
-    
+
     for (int i = 0; i < accum_blocks; i++)
     {
         bar.arrive_and_wait();
@@ -88,8 +92,11 @@ __global__ void matmul(bf16 *__a__, bf16 *__b__, bf16 *__c__, int N)
         if (next < accum_blocks)
         {
 
-            auto subtile_a = st_a[toc].template subtile<2, 2>(warpid(), 0);
-            auto subtile_b = st_b[toc].template subtile<2, 2>(warpid(), 0);
+            // auto subtile_a = st_a[toc].template subtile<2, 2>(warpid(), 0);
+            // auto subtile_b = st_b[toc].template subtile<2, 2>(warpid(), 0);
+
+            auto subtile_a = subtile_inplace<2, 2>(st_a[toc], warpid(), 0);
+            auto subtile_b = subtile_inplace<2, 2>(st_b[toc], warpid(), 0);
 
             auto ab_offset = rows_per_warp * warpid() * N + next * BLOCK_SIZE_K;
 
@@ -100,8 +107,11 @@ __global__ void matmul(bf16 *__a__, bf16 *__b__, bf16 *__c__, int N)
 #pragma unroll // actually important
         for (int k = 0; k < 2; k++)
         {
-            auto comp_subtile_a = st_a[tic].template subtile<2, 1>(warpid(), k);
-            auto comp_subtile_b = st_b[tic].template subtile<8, 1>(0, k);
+            // auto comp_subtile_a = st_a[tic].template subtile<2, 1>(warpid(), k);
+            // auto comp_subtile_b = st_b[tic].template subtile<8, 1>(0, k);
+
+            auto comp_subtile_a = subtile_inplace<2, 1>(st_a[tic], warpid(), k);
+            auto comp_subtile_b = subtile_inplace<8, 1>(st_b[tic], 0, k);
 
             load(a_reg, comp_subtile_a);
             load(b_reg, comp_subtile_b);
@@ -228,7 +238,7 @@ int main(int argc, char **argv)
 
     auto warmup_iters = warmup_milis * 1000 / est_time;
     auto ITER = milis * 1000 / est_time;
-    
+
     std::cout << "Warmup iters: " << warmup_iters << std::endl;
     std::cout << "Iters: " << ITER << std::endl;
 

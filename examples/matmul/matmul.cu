@@ -10,8 +10,11 @@ using namespace kittens;
 #define BLOCK_SIZE_K 32
 #define NUM_WARPS 4
 #define GROUP_SIZE 8
+#define MATMUL_N 2048
+#define NUM_STAGES 2
 
-__global__ void matmul(bf16 *__a__, bf16 *__b__, bf16 *__c__, int N)
+template <size_t stages_count = NUM_STAGES /* Pipeline with stages_count stages */>
+__global__ void matmul(const bf16 *__restrict__ __a__, const bf16 *__restrict__ __b__, bf16 *__c__, int N)
 { // N must be a multiple of 128!!
 
     int block_row = blockIdx.y;
@@ -36,16 +39,24 @@ __global__ void matmul(bf16 *__a__, bf16 *__b__, bf16 *__c__, int N)
 
     typedef st_bf<8, 2, ducks::st_layout::xor_swizzle> st_ab;
 
-    st_ab(&st_a)[2] = al.allocate<st_ab, 2>();
-    st_ab(&st_b)[2] = al.allocate<st_ab, 2>();
+    st_ab(&st_a)[stages_count] = al.allocate<st_ab, stages_count>();
+    st_ab(&st_b)[stages_count] = al.allocate<st_ab, stages_count>();
 
+    auto grid = cooperative_groups::this_grid();
     auto block = cooperative_groups::this_thread_block();
-    __shared__ cuda::barrier<cuda::thread_scope::thread_scope_block> bar;
-    if (threadIdx.x == 0)
-    {
-        init(&bar, block.size());
-    }
-    __syncthreads();
+    __shared__ cuda::pipeline_shared_state<
+        cuda::thread_scope::thread_scope_block,
+        stages_count>
+        shared_state;
+    auto pipeline = cuda::make_pipeline(block, &shared_state);
+
+    // auto block = cooperative_groups::this_thread_block();
+    // __shared__ cuda::barrier<cuda::thread_scope::thread_scope_block> bar;
+    // if (threadIdx.x == 0)
+    // {
+    //     init(&bar, block.size());
+    // }
+    // __syncthreads();
 
     // 32 x 16 A
     rt_bf<2, 1, ducks::rt_layout::row> a_reg;
@@ -56,62 +67,48 @@ __global__ void matmul(bf16 *__a__, bf16 *__b__, bf16 *__c__, int N)
     // 32 x 128 output
     rt_fl<2, 8, ducks::rt_layout::row> c_reg;
 
-    int num_warps = blockDim.x / 32;
-
     auto rows_per_warp = BLOCK_SIZE_N / NUM_WARPS;
 
     zero(c_reg); // reset
-
-    int tic = 0;
-    int toc = 1;
 
     auto a = __a__ + block_row * BLOCK_SIZE_N * N;
     auto b = __b__ + block_col * BLOCK_SIZE_N * N;
     auto c = __c__ + block_row * BLOCK_SIZE_N * N + block_col * BLOCK_SIZE_N;
 
-    // subtile_inplace<2, 1>(st_a[tic], warpid(), k);
-    auto subtile_a = subtile_inplace<2, 2>(st_a[tic], warpid(), 0);
-    auto subtile_b = subtile_inplace<2, 2>(st_b[tic], warpid(), 0);
-
-    // auto subtile_a = st_a[tic].template subtile<2, 2>(warpid(), 0);
-    // auto subtile_b = st_b[tic].template subtile<2, 2>(warpid(), 0);
-
-    auto ab_offset = rows_per_warp * warpid() * N;
-
-    load_async(subtile_a, a + ab_offset, N, bar);
-    load_async(subtile_b, b + ab_offset, N, bar);
-
     // now iterate through A, B
     const int accum_blocks = N / BLOCK_SIZE_K;
 
-    for (int i = 0; i < accum_blocks; i++)
+    for (int i = 0, fetch_batch = 0; i < accum_blocks; i++)
     {
-        bar.arrive_and_wait();
-        int next = i + 1;
 
-        if (next < accum_blocks)
+        for (; fetch_batch < accum_blocks && fetch_batch < (i + stages_count); ++fetch_batch)
         {
+            // This inner loop iterates over the memory transfers, making sure that the pipeline is always full
+            pipeline.producer_acquire();
+            size_t shared_idx = fetch_batch % stages_count;
+            size_t batch_idx = fetch_batch;
 
-            // auto subtile_a = st_a[toc].template subtile<2, 2>(warpid(), 0);
-            // auto subtile_b = st_b[toc].template subtile<2, 2>(warpid(), 0);
+            auto subtile_a = subtile_inplace<2, 2>(st_a[shared_idx], warpid(), 0);
+            auto subtile_b = subtile_inplace<2, 2>(st_b[shared_idx], warpid(), 0);
 
-            auto subtile_a = subtile_inplace<2, 2>(st_a[toc], warpid(), 0);
-            auto subtile_b = subtile_inplace<2, 2>(st_b[toc], warpid(), 0);
+            auto ab_offset = rows_per_warp * warpid() * N + batch_idx * BLOCK_SIZE_K;
 
-            auto ab_offset = rows_per_warp * warpid() * N + next * BLOCK_SIZE_K;
+            load_async(subtile_a, a + ab_offset, N, pipeline);
+            load_async(subtile_b, b + ab_offset, N, pipeline);
 
-            load_async(subtile_a, a + ab_offset, N, bar);
-            load_async(subtile_b, b + ab_offset, N, bar);
+            pipeline.producer_commit();
         }
+
+        pipeline.consumer_wait();
+
+        int shared_idx = i % stages_count;
 
 #pragma unroll // actually important
         for (int k = 0; k < 2; k++)
         {
-            // auto comp_subtile_a = st_a[tic].template subtile<2, 1>(warpid(), k);
-            // auto comp_subtile_b = st_b[tic].template subtile<8, 1>(0, k);
 
-            auto comp_subtile_a = subtile_inplace<2, 1>(st_a[tic], warpid(), k);
-            auto comp_subtile_b = subtile_inplace<8, 1>(st_b[tic], 0, k);
+            auto comp_subtile_a = subtile_inplace<2, 1>(st_a[shared_idx], warpid(), k);
+            auto comp_subtile_b = subtile_inplace<8, 1>(st_b[shared_idx], 0, k);
 
             load(a_reg, comp_subtile_a);
             load(b_reg, comp_subtile_b);
@@ -119,8 +116,7 @@ __global__ void matmul(bf16 *__a__, bf16 *__b__, bf16 *__c__, int N)
             dot(c_reg, a_reg, b_reg, c_reg);
         }
 
-        tic ^= 1;
-        toc ^= 1;
+        pipeline.consumer_release();
     }
 
     auto c_offset = rows_per_warp * warpid() * N;
@@ -147,8 +143,6 @@ inline void __cudaCheckError(const char *file, const int line)
         exit(-1);
     }
 }
-
-#define MATMUL_N 2048
 
 int main(int argc, char **argv)
 {
@@ -214,20 +208,33 @@ int main(int argc, char **argv)
     cudaMemcpy(d_b, b_bf, TOTAL_ELEMENTS * sizeof(bf16), cudaMemcpyHostToDevice);
     cudaMemcpy(d_c, c_bf, TOTAL_ELEMENTS * sizeof(bf16), cudaMemcpyHostToDevice);
 
-    // tile size * bfloat * a and b * tic and toc
-    unsigned long mem_size = 128 * 32 * 2 * 2 * 2;
+    // tile size * bfloat * a and b * num_stages
+    unsigned long mem_size = 128 * 32 * 2 * 2 * NUM_STAGES;
+    std::cout << "Shared memory size: " << mem_size << std::endl;
+
+    // set func
+    cudaError_t status;
+    status = cudaFuncSetAttribute(
+        matmul<NUM_STAGES>,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        mem_size);
+    if (status != cudaSuccess)
+    {
+        std::cerr << "cudaFuncSetAttribute failed: " << cudaGetErrorString(status) << std::endl;
+        return 1;
+    }
 
     dim3 grid(MATMUL_N / BLOCK_SIZE_N, MATMUL_N / BLOCK_SIZE_N);
 
-    constexpr bool run_once_and_finish = true;
+    constexpr bool run_once_and_finish = false;
 
     if (run_once_and_finish)
     {
         matmul<<<grid, BLOCK_SIZE_N, mem_size>>>(d_a, d_b, d_c, MATMUL_N);
         cudaDeviceSynchronize();
+        CudaCheckError();
         return 0;
     }
-
 
     constexpr int warmup_milis = 1000;
     constexpr int milis = 1000;

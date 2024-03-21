@@ -83,8 +83,9 @@ __device__ inline static void store(U *dst, const ST &src) {
 }
 
 
-template<ducks::st::row_layout ST>
-__device__ static inline void load_async(ST &dst, const bf16 *src, const int row_stride, cuda::barrier<cuda::thread_scope_block> &barrier) {
+template<ducks::st::row_layout ST, typename wait_type>
+// __device__ static inline void load_async(ST &dst, const bf16 *src, const int row_stride, cuda::barrier<cuda::thread_scope_block> &barrier) {
+__device__ static inline void load_async(ST &dst, const bf16 *src, const int row_stride, wait_type &barrier) {
     // each thread needs to do 1 call per width*height
     // attempting to improve striping into dram
     // each lane of the warp should store sequential into dram
@@ -112,6 +113,7 @@ __device__ static inline void load_async(ST &dst, const bf16 *src, const int row
         );
     }
 }
+
 template<ducks::st::row_layout ST>
 __device__ static inline void store_async(bf16 *dst, const ST &src, const int row_stride, cuda::barrier<cuda::thread_scope_block> &barrier) {
     // each thread needs to do 1 call per width*height

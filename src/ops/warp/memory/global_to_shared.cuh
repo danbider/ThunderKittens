@@ -9,8 +9,10 @@ namespace kittens {
 
 // ----------- ROW LAYOUTS ----------
 
-template<int height, int width, st_row_layout layout>
-__device__ static inline void load(st<bf16, height, width, layout> &dst, const bf16 *src, const int row_stride) {
+// template<int height, int width, st_row_layout layout>
+// __device__ static inline void load(st<bf16, height, width, layout> &dst, const bf16 *src, const int row_stride) {
+template<st_type_rowlayout ST, typename U>
+__device__ static inline void load(ST &dst, const U *src, const int row_stride) {
     // each thread needs to do 1 call per width*height
     // attempting to improve striping into dram
     // each lane of the warp should store sequential into dram
@@ -33,15 +35,18 @@ __device__ static inline void load(st<bf16, height, width, layout> &dst, const b
         *(float4*)(&dst[{row, col}]) = *(float4*)(&src[row*row_stride + col]);
     }
 }
-template<int height, int width, st_row_layout layout>
-__device__ static inline void store(bf16 *dst, const st<bf16, height, width, layout> &src, const int row_stride) {
+
+// template<int height, int width, st_row_layout layout>
+// __device__ static inline void store(bf16 *dst, const st<bf16, height, width, layout> &src, const int row_stride) {
+template<st_type_rowlayout ST, typename U>
+__device__ static inline void store(U *dst, const ST &src, const int row_stride) {
 
     int laneid = threadIdx.x % 32;
 
     // we can handle this many rows each time we run a memcpy_async
-    int elem_per_memcpy = sizeof(float4)/sizeof(bf16);
-    int memcpy_per_row = src.cols / elem_per_memcpy;
-    int total_calls = src.height * src.width;
+    constexpr int elem_per_memcpy = sizeof(float4)/sizeof(bf16);
+    constexpr int memcpy_per_row = src.cols / elem_per_memcpy;
+    constexpr int total_calls = src.height * src.width;
 
     #pragma unroll
     for(int i = 0; i < total_calls; i++) {
@@ -83,8 +88,10 @@ __device__ inline static void store(U *dst, const ST &src) {
 }
 
 
-template<int height, int width, st_row_layout layout>
-__device__ static inline void load_async(st<bf16, height, width, layout> &dst, const bf16 *src, const int row_stride, cuda::barrier<cuda::thread_scope_block> &barrier) {
+// template<int height, int width, st_row_layout layout>
+// __device__ static inline void load_async(st<bf16, height, width, layout> &dst, const bf16 *src, const int row_stride, cuda::barrier<cuda::thread_scope_block> &barrier) {
+template<st_type_rowlayout ST>
+__device__ static inline void load_async(ST &dst, const bf16 *src, const int row_stride, cuda::barrier<cuda::thread_scope_block> &barrier) {
     // each thread needs to do 1 call per width*height
     // attempting to improve striping into dram
     // each lane of the warp should store sequential into dram
@@ -92,9 +99,9 @@ __device__ static inline void load_async(st<bf16, height, width, layout> &dst, c
     int laneid = threadIdx.x % 32;
 
     // we can handle this many rows each time we run a memcpy_async
-    int elem_per_memcpy = sizeof(float4)/sizeof(bf16);
-    int memcpy_per_row = dst.cols / elem_per_memcpy;
-    int total_calls = dst.height * dst.width;
+    constexpr int elem_per_memcpy = sizeof(float4)/sizeof(bf16);
+    constexpr int memcpy_per_row = dst.cols / elem_per_memcpy;
+    constexpr int total_calls = dst.height * dst.width;
 
     #pragma unroll
     for(int i = 0; i < total_calls; i++) {
@@ -112,8 +119,13 @@ __device__ static inline void load_async(st<bf16, height, width, layout> &dst, c
         );
     }
 }
-template<int height, int width, st_row_layout layout>
-__device__ static inline void store_async(bf16 *dst, const st<bf16, height, width, layout> &src, const int row_stride, cuda::barrier<cuda::thread_scope_block> &barrier) {
+
+
+// template<int height, int width, st_row_layout layout>
+// __device__ static inline void store_async(bf16 *dst, const st<bf16, height, width, layout> &src, const int row_stride, cuda::barrier<cuda::thread_scope_block> &barrier) {
+template<st_type_rowlayout ST>
+__device__ static inline void store_async(bf16 *dst, const ST &src, const int row_stride, cuda::barrier<cuda::thread_scope_block> &barrier) {
+    
     // each thread needs to do 1 call per width*height
     // attempting to improve striping into dram
     // each lane of the warp should store sequential into dram
@@ -145,9 +157,11 @@ __device__ static inline void store_async(bf16 *dst, const st<bf16, height, widt
 
 // ----------- COL LAYOUTS ----------
 
-template<int height, int width, st_col_layout layout>
-__device__ static inline void load(st<bf16, height, width, layout> &dst, const bf16 *src, const int row_stride) {
-    
+// template<int height, int width, st_col_layout layout>
+// __device__ static inline void load(st<bf16, height, width, layout> &dst, const bf16 *src, const int row_stride) {
+template<st_type_rowlayout ST>
+__device__ static inline void load(ST &dst, const bf16 *src, const int row_stride) {
+
     int laneid = threadIdx.x % 32;
 
     // in column mode we unfortunately can only transfer one element at at time.
@@ -166,8 +180,11 @@ __device__ static inline void load(st<bf16, height, width, layout> &dst, const b
         dst[{row, col}] = src[row*row_stride + col];
     }
 }
-template<int height, int width, st_col_layout layout>
-__device__ static inline void store(bf16 *dst, const st<bf16, height, width, layout> &src, const int row_stride) {
+
+// template<int height, int width, st_col_layout layout>
+// __device__ static inline void store(bf16 *dst, const st<bf16, height, width, layout> &src, const int row_stride) {
+template<st_type_collayout ST>
+__device__ static inline void store(bf16 *dst, const ST &src, const int row_stride) {
 
     int laneid = threadIdx.x % 32;
 

@@ -219,6 +219,16 @@ int main(int argc, char **argv)
 
     dim3 grid(MATMUL_N / BLOCK_SIZE_N, MATMUL_N / BLOCK_SIZE_N);
 
+    constexpr bool run_once_and_finish = true;
+
+    if (run_once_and_finish)
+    {
+        matmul<<<grid, BLOCK_SIZE_N, mem_size>>>(d_a, d_b, d_c, MATMUL_N);
+        cudaDeviceSynchronize();
+        return 0;
+    }
+
+
     constexpr int warmup_milis = 1000;
     constexpr int milis = 1000;
     constexpr int est_iters = 10;

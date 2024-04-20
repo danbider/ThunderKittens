@@ -20,20 +20,6 @@ __global__ void matmul(const bf16 *__restrict__ __a__, const bf16 *__restrict__ 
     int block_row = blockIdx.y;
     int block_col = blockIdx.x;
 
-    // int pid = blockIdx.x + blockIdx.y * gridDim.x;
-
-    // auto num_pid_m = N / 128;
-    // auto num_pid_n = N / 128;
-    // auto num_pid_in_group = GROUP_SIZE * num_pid_n;
-    // auto group_id = pid / num_pid_in_group;
-    // auto first_pid_m = group_id * GROUP_SIZE;
-    // auto group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE);
-    // auto pid_m = first_pid_m + (pid % group_size_m);
-    // auto pid_n = (pid % num_pid_in_group) / group_size_m;
-
-    // auto block_row = pid_m;
-    // auto block_col = pid_n;
-
     extern __shared__ alignment_dummy __shm[];
     shared_allocator al = shared_allocator::create_allocator((int *)&__shm[0]);
 
@@ -49,14 +35,6 @@ __global__ void matmul(const bf16 *__restrict__ __a__, const bf16 *__restrict__ 
         stages_count>
         shared_state;
     auto pipeline = cuda::make_pipeline(block, &shared_state);
-
-    // auto block = cooperative_groups::this_thread_block();
-    // __shared__ cuda::barrier<cuda::thread_scope::thread_scope_block> bar;
-    // if (threadIdx.x == 0)
-    // {
-    //     init(&bar, block.size());
-    // }
-    // __syncthreads();
 
     // 32 x 16 A
     rt_bf<2, 1, ducks::rt_layout::row> a_reg;
@@ -146,8 +124,6 @@ inline void __cudaCheckError(const char *file, const int line)
 
 int main(int argc, char **argv)
 {
-    // TODO: consider doing sequential kernel launches to force batches dimension element to execute sequentially,
-    // which may increase the probability of L2 cache hits on KV
 
     std::cout << "Entered main!" << std::endl;
 

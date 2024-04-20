@@ -87,8 +87,10 @@ __device__ static inline void store(bf16 *dst, const ST &src, const int row_stri
  *
  * @note This function expects 16-byte alignments. Otherwise, behavior is undefined.
  */
-template<ducks::st::all ST>
-__device__ static inline void load_async(ST &dst, const bf16 *src, const int row_stride, cuda::barrier<cuda::thread_scope_block> &barrier) {
+// template<ducks::st::all ST>
+// __device__ static inline void load_async(ST &dst, const bf16 *src, const int row_stride, cuda::barrier<cuda::thread_scope_block> &barrier) {
+template<ducks::st::all ST, typename wait_type>
+__device__ static inline void load_async(ST &dst, const bf16 *src, const int row_stride, wait_type &barrier) {
     // each thread needs to do 1 call per width*height
     // attempting to improve striping into dram
     // each lane of the warp should store sequential into dram

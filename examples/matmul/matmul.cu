@@ -21,7 +21,7 @@ __global__ void matmul(const bf16 *__restrict__ __a__, const bf16 *__restrict__ 
     int block_col = blockIdx.x;
 
     extern __shared__ alignment_dummy __shm[];
-    shared_allocator al = shared_allocator::create_allocator((int *)&__shm[0]);
+    shared_allocator al((int*)&__shm[0]);
 
     typedef st_bf<8, 2, ducks::st_layout::xor_swizzle> st_ab;
 

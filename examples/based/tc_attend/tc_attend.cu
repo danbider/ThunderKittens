@@ -1,213 +1,125 @@
-#include <iostream>
-#include <math.h>
-#include <assert.h>
-#include <mma.h>
-using namespace nvcuda; 
+#include "src/kittens.cuh"
 
-# include <cuda/pipeline>
-# include <cooperative_groups.h>
-# include "src/kittens.cuh"
-# include "src/common/pyutils/torch_helpers.cuh"
-
-#include <ATen/cuda/CUDAContext.h>  // Include necessary for getting the current stream
-
+#define NUM_WORKERS (4) // this comes from the fact that we want a 64-long sliding window
 using namespace kittens;
 
-/*
-This function seems to broadcast a single value per worker into shared memory,
-then use a single worker to do a reduction on them, and then have
-all of the workers take back down that single reduced value.
+#define WINDOW_WIDTH (256)
+static_assert(WINDOW_WIDTH%64==0 && WINDOW_WIDTH<=256);
+#define WINDOW_TILES ((WINDOW_WIDTH/64)+1)
+#define WINDOW_MINI_TILES ((WINDOW_WIDTH/16)+1)
 
-The way it's written right now looks like a bug due to `shm[warpid] = f;`
-^ that looks like a race condition, and only lane 0 should write that.
-*/
-template<typename op>
-__device__ void shm_broadcast(float &f, float *shm, const int workers = 4) {
-    auto warpid = threadIdx.x / 32;
-    auto lane   = threadIdx.x % 32;
-    if(lane == 0) shm[warpid] = f;
-    __syncthreads();
-    if(warpid == 0) {
-        if(lane == 0) {
-            for(auto j = 1; j < workers; j++) {f = op::op(f,shm[j]);}
-            for(auto j = 0; j < workers; j++) {shm[j] = f;}
-        }
-        __syncwarp();
-    }
-    __syncthreads();
-    f = shm[warpid];
-}
+__global__ __launch_bounds__(NUM_WORKERS*kittens::WARP_THREADS, 2)
+void sliding_window(int n, int d, const bf16* __restrict__ __q__, const bf16* __restrict__ __k__, const bf16* __restrict__ __v__, bf16* __o__) {
 
-/*
-This function takes in a tile and a row vec and returns a col vec.
-First, we multiply every column value by the row vector.
-Then, we sum across that axis (and o) and store the result in o.
+    using G = kittens::group<NUM_WORKERS>;
 
-This could be refactored to be slightly more functional but that's alright.
-*/
-// GEMV
-__device__ void gemv(rt_fl_1x4<>::col_vec  &o, rt_fl_1x4<>::row_vec &x, rt_fl_1x4<> &a) { 
-    rt_fl_1x4<> t;
-    // The accumulator is row x column; row multiply means that each row is multiplied by a column matrix. 
-    mul_col(t, a, x); // multiply vv in place with aa: a * v.unsqueeze(1) // row, row, col
-    row_sum(o, t, o); // aa.sum(0) sum across all the rows 
-}
+    auto warpid        = kittens::warpid();
+    auto block_start   = blockIdx.x*(n*64);
+    const bf16 *_q = __q__ + block_start, *_k = __k__ + block_start, *_v = __v__ + block_start;
+          bf16 *_o = __o__ + block_start;
 
-/*
-This function seems to be the transpose of the above function.
-*/
-// GEMV
-__device__ void gemv_two(rt_fl_4x1<>::row_vec  &o, rt_fl_4x1<>::col_vec &x, rt_fl_4x1<> &a) { 
-    rt_fl_4x1<> t;
-    copy(t, a);
-    // The accumulator is row x column; row multiply means that each row is multiplied by a column matrix. 
-    // mul_row(t, a, x); // SA: uncommenting this line leads to nans in the output
-    col_sum(o, t, o); // aa.sum(0) sum across all the rows 
-}
-
-
-/*
-This is either global to reg or shared to reg, can't quite tell yet.
-
-Either way I'm going to find a way to rename it to "load".
-*/
-static void __device__
-vec_to_rvec(rt_fl_4x1<>::col_vec &dst, const bf16 *src) {
-    using T = bf16;
-    using U = float;
-    auto row = kittens::laneid() / 4;
-    __syncwarp();    
-    for(auto h = 0; h < dst.outer_dim; h++) {
-        dst[h][0].x = base_types::convertor<U, T>::convert(src[h*kittens::TILE_DIM + row]);    
-        dst[h][1].x = base_types::convertor<U, T>::convert(src[h*kittens::TILE_DIM + row + 8]); 
-    }
-}
-
-/*
-This is the equivalent "store" of above.
-*/
-static void __device__
-rvec_to_vec(bf16 *dst, rt_fl_1x4<>::col_vec &src) {
-    using U = bf16;
-    using T = float;
-    auto row = kittens::laneid() / 4;
-    __syncwarp();
-    if(kittens::laneid() % 4 == 0) { // only the leaders write
-        for(auto h = 0; h < src.outer_dim; h++) {
-            dst[h*TILE_DIM + row]     = base_types::convertor<U, T>::convert(src[h][0].x);  
-            dst[h*TILE_DIM + row + 8] = base_types::convertor<U, T>::convert(src[h][1].x);
-        }
-    }    
-}
-
-
-/*
-Main kernel.
-*/
-template<typename H, typename T>
-__global__
-void sliding_window_ker_hack(int n, int j, bool just_q, const T* __q, const T* __k, const T* __v, T* __o) {
-    
-    auto warpid = kittens::warpid();
-    const int d = 64;
-    const int window_size = 64;
-    constexpr int workers = 4;
-    const int threads = workers * kittens::WARP_THREADS;
-    auto head_offset  = blockIdx.x * n * d;
-    using block = kittens::block<workers>;
-    
-    const H* _q = device_cast(__q) + blockIdx.x*d;
-    const H* _k = device_cast(__k) + head_offset;
-    const H* _v = device_cast(__v) + head_offset;
-          H* _o = device_cast(__o) + blockIdx.x*d; // just a single vector
-
-    // Register
-    rt_fl_1x4<> k_slice; 
-    rt_fl_4x1<> v_slice; // Each of the 4 workers stores a column
-    rt_fl_1x4<>::row_vec qv; // full local copy 
-    rt_fl_1x4<>::col_vec ws; 
-    rt_fl_4x1<>::col_vec wv; // full local copy 
-    rt_fl_4x1<>::row_vec os; // shards
-    auto vec_idx = 0;
-    __syncthreads();
-    load(qv, _q + vec_idx); // every warp gets a full copy of q; These are column slices of the matrix.: | K_1 | K_2 | K_3 |
-
-    // Shared
     extern __shared__ alignment_dummy __shm[]; // this is the CUDA shared memory
     shared_allocator al((int*)&__shm[0]);
-    st_bf_1x4<ducks::st_layout::xor_swizzle>::row_vec &w = al.allocate<st_bf_1x4<ducks::st_layout::xor_swizzle>::row_vec>();
-    __shared__ float _max[workers], _sum[workers];  
-
-    // Option A (References / Following the tests)
-    const auto start_idx = 0;
-    st_bf_4x4<ducks::st_layout::xor_swizzle> &k = al.allocate<st_bf_4x4<ducks::st_layout::xor_swizzle>>(); // We use 4x4 since 4x16 is 64 window size
-    st_bf_4x4<ducks::st_layout::xor_swizzle> &v = al.allocate<st_bf_4x4<ducks::st_layout::xor_swizzle>>();
-    block::load(k, _k + start_idx, d); // One warp loads from global to shared
-    block::load(v, _v + start_idx, d);
-    __syncthreads();
-    auto subtile = subtile_inplace<1,4>(k, warpid, 0); // All the other warps load from shared to shared
-    load(k_slice, subtile);
-    __syncthreads();
-
-
-    one(k_slice);
-    one(v_slice);
-
-
-    // The algorithm.
-    // qs = [q for j in range(4)] # broadcast q to each warp
-    // ks = [k[:,j*d//4:(j+1)*d//4] for j in range(4)] # shard k
-    // ws = [torch.einsum("d, de->e", qs[j],ks[j]) for j in range(4)]
-    zero(ws);
-    gemv(ws, qv, k_slice);
-
-    // local_max = [ws[j].max() for j in range(4)] # compute local, then global max
-    // the_max = torch.tensor(local_max).max()
-    float local_max= -INFINITY;
-    max(ws, ws, local_max);
-    shm_broadcast<base_ops::mul>(local_max, _max);
     
-    // ews = [torch.exp(ws[j] - the_max) for j in range(4)]
-    sub(ws, ws, local_max);
-    exp(ws, ws);
+    st_bf_1x4<ducks::st_layout::swizzle> (&k_smem)[WINDOW_TILES][NUM_WORKERS] = al.allocate<st_bf_1x4<ducks::st_layout::swizzle>, WINDOW_TILES, NUM_WORKERS>();
+    st_bf_1x4<ducks::st_layout::swizzle> (&v_smem)[WINDOW_TILES][NUM_WORKERS] = al.allocate<st_bf_1x4<ducks::st_layout::swizzle>, WINDOW_TILES, NUM_WORKERS>();
 
-    // es  = [ews[j].sum() for j in range(4)]
-    float local_sum = 0.f;
-    add(ws, ws, local_sum);
-    shm_broadcast<base_ops::sum>(local_sum, _sum);
+    rt_bf_1x4<> q_reg, k_reg, v_reg;
+    rt_fl_1x1<> att_block[WINDOW_MINI_TILES];
+    rt_bf_1x1<> att_block_bf;
+    rt_fl_1x4<> o_reg;
+    rt_fl_1x1<>::col_vec max_vec, norm_vec;
     
-    // w  /= the_sum
-    div(ws, ws, local_sum);
+    int qo_blocks = n / (q_reg.rows*NUM_WORKERS), kv_blocks = n / (q_reg.rows*NUM_WORKERS);
 
-    // broadcast w back to shared memory
-    rvec_to_vec(&w.data[warpid*kittens::TILE_DIM], ws);
-    __syncthreads(); // let the writes complete
-    vec_to_rvec(wv, w.data); // read the *whole* v here.
-    
-    // we want a column stripe of V
-    auto subtile_v = subtile_inplace<4,1>(v, 0, warpid);
-    // load(v_slice, subtile_v); // SA: Uncommenting this leads to static asserts in the output (even if i uncomment the thread_block_loads)
-    zero(os);
-    gemv_two(os, wv, v_slice);
-    
-    // now we have a fragment of v and we write, this write is to *global* memory.
-    store(_o + warpid*kittens::TILE_DIM, os);
+    int start_block = 0, last_block = WINDOW_TILES-1;
+    for(auto qo_blk = 0; qo_blk < qo_blocks; qo_blk++, start_block=(start_block+1)%WINDOW_TILES, last_block=(last_block+1)%WINDOW_TILES) {
+
+        __syncthreads(); // we need to make sure all warps are done before we can start loading the next kv chunk
+
+        // load the curent k, v blocks into last_block. If qo_blk > 0, then the previous tiles stick around.
+        load(k_smem[last_block][warpid], _k + (qo_blk*NUM_WORKERS + warpid)*q_reg.num_elements, q_reg.cols);
+        load(v_smem[last_block][warpid], _v + (qo_blk*NUM_WORKERS + warpid)*q_reg.num_elements, q_reg.cols);
+
+        // load q registers
+        load(q_reg, _q + (qo_blk*NUM_WORKERS + warpid)*q_reg.num_elements, q_reg.cols);
+        mul(q_reg, q_reg, __float2bfloat16(0.125f)); // temperature adjustment
+
+        neg_infty(max_vec); // zero registers for the Q chunk
+        zero(norm_vec);
+        zero(o_reg);
+
+        __syncthreads(); // we need to make sure all memory is loaded before we can begin the compute phase
+
+        for(int subtile = 0; subtile < WINDOW_MINI_TILES; subtile++) {
+            int src_idx = warpid+subtile;
+            if (4*qo_blk + src_idx >= 4*(WINDOW_TILES-1)) {
+
+                load(k_reg, k_smem[(start_block+(src_idx/4))%WINDOW_TILES][src_idx%4]);
+
+                zero(att_block[subtile]);
+                mma_ABt(att_block[subtile], q_reg, k_reg, att_block[subtile]);
+                if(subtile == WINDOW_MINI_TILES-1) {
+                    // last tile becomes causal
+                    make_causal(att_block[subtile], att_block[subtile], base_types::constants<float>::neg_infty());
+                }
+            }
+            else {
+                neg_infty(att_block[subtile]); // initial blocks must be zero
+            }
+        }
+        // now do the softmax. first we subtract max for numerical stability. then exp.
+        #pragma unroll
+        for(int subtile = 0; subtile < WINDOW_MINI_TILES; subtile++) {
+            row_max(max_vec, att_block[subtile], max_vec); // accumulate onto the max_vec
+        }
+        #pragma unroll
+        for(int subtile = 0; subtile < WINDOW_MINI_TILES; subtile++) {
+            sub_row(att_block[subtile], att_block[subtile], max_vec);
+            exp(att_block[subtile], att_block[subtile]);
+        }
+        // now we sum so that we can divide.
+        #pragma unroll
+        for(int subtile = 0; subtile < WINDOW_MINI_TILES; subtile++) {
+            row_sum(norm_vec, att_block[subtile], norm_vec);
+        }
+        #pragma unroll
+        for(int subtile = 0; subtile < WINDOW_MINI_TILES; subtile++) {
+            div_row(att_block[subtile], att_block[subtile], norm_vec);
+        }
+        for(int subtile = 0; subtile < WINDOW_MINI_TILES; subtile++) {
+            int src_idx = warpid+subtile;
+            load(v_reg, v_smem[(start_block+(src_idx/4))%WINDOW_TILES][src_idx%4]);
+            rt_bf_1x4<ducks::rt_layout::col> &v_reg_col = swap_layout_inplace(v_reg); // this is a reference and the call has invalidated v_reg
+
+            copy(att_block_bf, att_block[subtile]);
+            mma_AB(o_reg, att_block_bf, v_reg_col, o_reg); // accumulate
+        }
+
+        store(_o + (qo_blk*NUM_WORKERS + warpid)*q_reg.num_elements, o_reg, d); // write out o. compiler has an issue with register usage if d is made constexpr q_reg.rows :/
+    }
 }
 
-void 
-sliding_window(int j,   
-    torch::Tensor q, torch::Tensor k, torch::Tensor v, 
-    torch::Tensor o) {
 
+// For testing via C++
+// #include "harness.impl" // (comment out when using the code below)
+
+
+// For binding to PyTorch (comment out include for harness.imple when using the code below)
+#include "src/common/pyutils/torch_helpers.cuh"
+#include <iostream>
+void sliding_window_tk(torch::Tensor q, torch::Tensor k, torch::Tensor v, torch::Tensor o) {
+    std::cout << "Entered Sliding window handler" << std::endl;
     CHECK_INPUT(q);
     CHECK_INPUT(k);
     CHECK_INPUT(v);
     CHECK_INPUT(o);
     
-    uint batch = q.size(0);
-    uint head  = q.size(1);
+    auto batch = q.size(0);
+    auto heads = q.size(1);
+    auto threads = NUM_WORKERS * kittens::WARP_THREADS;
+    auto n     = q.size(2);
     uint d     = q.size(3);
-    TORCH_CHECK(d == 64, "Only dimension 64 implemented...");
 
     bool k_same = true, v_same = true;
     for(auto i = 0; i < 2; i++) { 
@@ -216,23 +128,48 @@ sliding_window(int j,
     }
     k_same &= d == k.size(3);
     v_same &= d == v.size(3);
-    uint n     = k.size(2);
     v_same &= v.size(2) == n;
-
+    
     // This is just a restriction of what we're doing now...
     TORCH_CHECK(k_same, "X and K_out should be same size");
     TORCH_CHECK(v_same, "X and V_out should be same size");
-    
-    const int workers = 4;
-    using H = bf16;
-    using T = c10::BFloat16;
+    TORCH_CHECK(q.scalar_type() == c10::ScalarType::BFloat16, "Q is a Bfloat");
+    TORCH_CHECK(k.scalar_type() == c10::ScalarType::BFloat16, "K is a Bfloat");
+    TORCH_CHECK(v.scalar_type() == c10::ScalarType::BFloat16, "V is a Bfloat");
+    TORCH_CHECK(o.scalar_type() == c10::ScalarType::BFloat16, "O is a Bfloat");
+    TORCH_CHECK(n % (NUM_WORKERS*kittens::TILE_DIM) == 0, "The number of elements should be divisible the number of workers times stored fragments");
 
-    int threads = workers * kittens::WARP_THREADS;
+    // convert to bf16
+    c10::BFloat16 *q_ptr = q.data_ptr<c10::BFloat16>();
+    c10::BFloat16 *k_ptr = k.data_ptr<c10::BFloat16>();
+    c10::BFloat16 *v_ptr = v.data_ptr<c10::BFloat16>();
+    c10::BFloat16 *o_ptr = o.data_ptr<c10::BFloat16>();
 
-    auto stream_wrapper = at::cuda::getCurrentCUDAStream(q.device().index());
-    cudaStream_t stream = stream_wrapper.stream();
-    sliding_window_ker_hack<H,T><<<batch*head,threads,0,stream>>>(n, j, q.size(2) == 1,
-                        q.data_ptr<T>(), k.data_ptr<T>(), v.data_ptr<T>(), 
-                        o.data_ptr<T>());
+    const bf16* q_bf = reinterpret_cast<const bf16*>(q_ptr);
+    const bf16* k_bf = reinterpret_cast<const bf16*>(k_ptr);
+    const bf16* v_bf = reinterpret_cast<const bf16*>(v_ptr);
+          bf16* o_bf = reinterpret_cast<bf16*>(o_ptr);
+
+    std::cout << "Checks and casts" << std::endl;
+    unsigned long mem_size = kittens::MAX_SHARED_MEMORY;
+    cudaFuncSetAttribute(
+        sliding_window,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        mem_size
+    );
+
+    std::cout << "Set dynamic memory" << std::endl;
+    sliding_window<<<batch*heads,threads,mem_size>>>(n, d, q_bf, k_bf, v_bf, o_bf);
+
+    // TODO: setup to launch with CUDA STREAM
+    // auto stream_wrapper = at::cuda::getCurrentCUDAStream(q.device().index());
+    // cudaStream_t stream = stream_wrapper.stream();
+    // sliding_window<H,T><<<batch*head,threads,0,stream>>>(n, 
+    //                     q.data_ptr<T>(), k.data_ptr<T>(), v.data_ptr<T>(), 
+    //                     o.data_ptr<T>());
+
+    std::cout << "Launched kernel" << std::endl;
+    CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+    std::cout << "Exiting" << std::endl;
 }
 

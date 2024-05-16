@@ -16,6 +16,7 @@ using namespace kittens;
 
 const int d_model =  64; 
 const int d_state = 320;
+const int workers = 8;
 
 template<typename H> __device__ float4* _f4p(H *x)  { return (float4* ) x;}
 template<typename H> __device__ const float4* _f4pc(H *x)  { return (const float4* ) x;}
@@ -26,12 +27,11 @@ template<> __device__ inline __nv_bfloat16 __typeconvert<float,__nv_bfloat16>(fl
 
 template <typename H, typename T>
 __global__
-void based_simple_ker(const T* __q, const T* __k, const T* __v, T* __kv_state, T* __k_state, T* __out, T* __denom) { 
+void based_simple_ker(const T* __q, const T* __k, const T* __v, T* __kv_state, T* __k_state, T* __out) { 
 
     auto block_start = blockIdx.x;
     auto warpid = kittens::warpid();
     auto lane   = kittens::laneid();
-    const int workers  = 8; 
     const int nThreads = workers*kittens::WARP_THREADS;
 
     // Data size information
@@ -94,22 +94,28 @@ void based_simple_ker(const T* __q, const T* __k, const T* __v, T* __kv_state, T
     for(auto i = threadIdx.x; i < d_state; i+=nThreads) { 
         k_state[i] += k[i]; 
     }
-    __syncwarp();
     
-    // den = torch.einsum("f,f->1", q, k_state) + eps;
+    // Compute den = torch.einsum("f,f->1", q, k_state) + eps;
+    // 1. perform the elementwise product, using all threads
+    __syncthreads();
     for(auto i = threadIdx.x; i < d_state; i+=nThreads) { 
         kq[i] = __typeconvert<float,H>(0.f);
-        kq[i] = (q[i]*k_state[i] + __float2bfloat16(0.0000000001f)); 
+        kq[i] = (q[i]*k_state[i]); 
     }
+
+    // 2. perform the reduction, using one thread
+    __syncthreads();
     if (warpid == 0 && lane == 0) { 
         den[0] = __typeconvert<float,H>(0.f); 
-        for (auto i = 0; i < d_state; i++) { den[0] += kq[i]; }
+        for (auto i = 0; i < d_state; i++) { 
+            den[0] += kq[i]; 
+        }
+        den[0] += __typeconvert<float,H>(1e-6f);
     }
-    __syncwarp();
-    
 
     // Store v across threads for the next phase; 
     // Assumes d_model fits in register and is a multiple of 32
+    __syncthreads();
     register H v_vals[d_model / kittens::WARP_THREADS]; // 64 / 32 = 2
     register H num_vals[d_model / kittens::WARP_THREADS];
 
@@ -208,7 +214,7 @@ void based_simple_ker(const T* __q, const T* __k, const T* __v, T* __kv_state, T
 
 void 
 based_step(torch::Tensor q, torch::Tensor k, torch::Tensor v, 
-            torch::Tensor kv_state, torch::Tensor k_state, torch::Tensor out, torch::Tensor denom) {
+            torch::Tensor kv_state, torch::Tensor k_state, torch::Tensor out) {
     CHECK_INPUT(q);
     CHECK_INPUT(k);
     CHECK_INPUT(v);
@@ -235,5 +241,5 @@ based_step(torch::Tensor q, torch::Tensor k, torch::Tensor v,
     based_simple_ker<H,T><<<batch,threads,0,stream>>>(
                 q.data_ptr<T>(), k.data_ptr<T>(), v.data_ptr<T>(),
                 kv_state.data_ptr<T>(), k_state.data_ptr<T>(),
-                out.data_ptr<T>(), denom.data_ptr<T>());
+                out.data_ptr<T>());
 }

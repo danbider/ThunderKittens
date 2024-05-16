@@ -1,4 +1,4 @@
-#include "../../src/kittens.cuh"
+#include "../../../src/kittens.cuh"
 #include <cuda/pipeline>
 #include <cooperative_groups.h>
 #include <iostream>
@@ -23,7 +23,7 @@ __global__ void matmul(const bf16 *__restrict__ __a__, const bf16 *__restrict__ 
     extern __shared__ alignment_dummy __shm[];
     shared_allocator al((int*)&__shm[0]);
 
-    typedef st_bf<8, 2, ducks::st_layout::xor_swizzle> st_ab;
+    typedef st_bf<8, 2, ducks::st_layout::swizzle> st_ab;
 
     st_ab(&st_a)[stages_count] = al.allocate<st_ab, stages_count>();
     st_ab(&st_b)[stages_count] = al.allocate<st_ab, stages_count>();
@@ -91,7 +91,7 @@ __global__ void matmul(const bf16 *__restrict__ __a__, const bf16 *__restrict__ 
             load(a_reg, comp_subtile_a);
             load(b_reg, comp_subtile_b);
 
-            dot(c_reg, a_reg, b_reg, c_reg);
+            mma_ABt(c_reg, a_reg, b_reg, c_reg);
         }
 
         pipeline.consumer_release();

@@ -135,19 +135,34 @@ int main(int argc, char **argv) {
     std::ofstream o_file("printouts/o.txt");
     std::ofstream diff_file("printouts/diff.txt");
 
+    float total_diff = 0;
+
     std::cout << "Total elements: " << TOTAL_ELEMENTS_VO << std::endl;
     std::cout << "Total unique elements: " << TOTAL_UNIQUE_ELEMENTS_VO << std::endl;
     for(int i = 0; i < TOTAL_ELEMENTS_VO; i++) {
-        float diff = o[i % TOTAL_UNIQUE_ELEMENTS_VO] - o_ref[i % TOTAL_UNIQUE_ELEMENTS_VO];
+        float diff = o[i] - o_ref[i % TOTAL_UNIQUE_ELEMENTS_VO];
         // if (i < 10) std::cout << o_ref[i % TOTAL_UNIQUE_ELEMENTS_VO] << std::endl;
         if(i < TOTAL_UNIQUE_ELEMENTS_VO) {
-            o_ref_file << o_ref[i % TOTAL_UNIQUE_ELEMENTS_VO] << ' ';
-            o_file << o[i % TOTAL_UNIQUE_ELEMENTS_VO] << ' ';
+            o_ref_file << o_ref[i] << ' ';
+            o_file << o[i] << ' ';
             diff_file << diff << ' ';
         }
         if(abs(diff) > 0.05 || isnan(diff)) {
             good = false;
         }
+
+        total_diff += abs(diff);
+    }
+
+    // print out average difference
+    total_diff /= TOTAL_ELEMENTS_VO;
+    std::cout << "Average difference in output: " << total_diff << std::endl;
+
+    if (total_diff > 0.05) {
+        good = false;
+    }
+    else {
+        good = true;
     }
 
    // Check KV state
@@ -161,16 +176,31 @@ int main(int argc, char **argv) {
     std::ofstream kv_state_ref_file("printouts/kv_state_ref.txt");
     std::ofstream kv_state_diff_file("printouts/kv_state_diff.txt");
 
+    float kv_total_diff = 0;
+
     for(int i = 0; i < TOTAL_ELEMENTS_KV; i++) {
-        float diff = kv_state[i % TOTAL_UNIQUE_ELEMENTS_KV] - kv_state_ref[i % TOTAL_UNIQUE_ELEMENTS_KV];
+        float diff = kv_state[i] - kv_state_ref[i % TOTAL_UNIQUE_ELEMENTS_KV];
         if(i < TOTAL_UNIQUE_ELEMENTS_KV) {
-            kv_state_ref_file << kv_state_ref[i % TOTAL_UNIQUE_ELEMENTS_KV] << ' ';
-            kv_state_file << kv_state[i  % TOTAL_UNIQUE_ELEMENTS_KV] << ' ';
+            kv_state_ref_file << kv_state_ref[i] << ' ';
+            kv_state_file << kv_state[i] << ' ';
             kv_state_diff_file << diff << ' ';
         }
         if(abs(diff) > 0.05 || isnan(diff)) {
             good_kv = false;
         }
+
+        kv_total_diff += abs(diff);
+    }
+
+    // print out average difference
+    kv_total_diff /= TOTAL_ELEMENTS_KV;
+    std::cout << "Average difference in KV state: " << kv_total_diff << std::endl;
+
+    if (kv_total_diff > 0.05) {
+        good_kv = false;
+    }
+    else {
+        good_kv = true;
     }
 
     std::cout << "Average execution time: " << std::chrono::duration_cast<std::chrono::microseconds>(finish - start).count() / ITER << " us" << std::endl;

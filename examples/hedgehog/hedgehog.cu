@@ -64,7 +64,7 @@ __device__ inline void tile_reduce(ST (&dst)[N_TILES]) {
 }
 
 __global__ __launch_bounds__(NUM_THREADS, 1)
-void hedgehog_linear_attention(int n, const bf16* __q, const bf16* __k, const bf16* __v, bf16* __o, bf16* __kv_state) {
+void hedgehog_linear_attention(int n, const bf16* __q, const bf16* __k, const bf16* __v, bf16* __o) {
 
     using G = kittens::group<NUM_WORKERS>;
 
@@ -75,7 +75,6 @@ void hedgehog_linear_attention(int n, const bf16* __q, const bf16* __k, const bf
     const bf16 *k_g   = reinterpret_cast<const bf16*>(__k)+blockIdx.x*(n*D_QK);
     const bf16 *v_g   = reinterpret_cast<const bf16*>(__v)+blockIdx.x*(n*D_VO);
           bf16 *o_g   = reinterpret_cast<bf16*>      (__o)+blockIdx.x*(n*D_VO);
-          bf16 *kv_g  = reinterpret_cast<bf16*>(__kv_state)+blockIdx.x*(D_QK*D_VO);
 
     extern __shared__ alignment_dummy __shm[];
     shared_allocator al((int*)&__shm[0]);
@@ -83,8 +82,8 @@ void hedgehog_linear_attention(int n, const bf16* __q, const bf16* __k, const bf
     using VO_BLOCK = st_bf_1x4<layout>;
     QK_BLOCK (&q_s)[2][NUM_WORKERS] = al.allocate<QK_BLOCK, 2, NUM_WORKERS>(); // 2 * 8192 bytes -- 16x256
     QK_BLOCK (&k_s)[2][NUM_WORKERS] = al.allocate<QK_BLOCK, 2, NUM_WORKERS>(); // 2 * 8192 bytes -- 16x256
-    VO_BLOCK (&v_s)[2]              = al.allocate<VO_BLOCK, 2>(); // 2 * 2048 bytes
-    VO_BLOCK (&o_s)[2]              = al.allocate<VO_BLOCK, 2>(); // 2 * 2048 bytes
+    VO_BLOCK (&v_s)[2]              = al.allocate<VO_BLOCK, 2>();              // 2 * 2048 bytes
+    VO_BLOCK (&o_s)[2]              = al.allocate<VO_BLOCK, 2>();              // 2 * 2048 bytes
 
     // att_accumulate is not actually a QK block, even if it happens to be the same type here.
     st_bf_1x1<layout> (&att_accumulate)[NUM_WORKERS] = al.allocate<st_bf_1x1<layout>, NUM_WORKERS>(); // 8192 bytes -- 16x(16x16) = 16x(256)
@@ -159,10 +158,6 @@ void hedgehog_linear_attention(int n, const bf16* __q, const bf16* __k, const bf
         auto &kt = transpose_inplace(k); // k is now transposed! k has been invalidated; there is only kt.
         mma_AB(kv_state, kt, v_col, kv_state);
     }
-
-     __syncthreads();
-    store(kv_g + warpid*kv_state.num_elements, kv_state, D_VO); 
-    __syncthreads();
 }
 
 

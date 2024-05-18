@@ -45,19 +45,15 @@ def pytorch_test(Q, K, V, TESTNAME='all'):
     ATT = make_causal(torch.einsum("bhnd,bhmd->bhnm", Q, K))
     out = torch.einsum("bhnm,bhmd->bhnd", ATT, V).to(torch.bfloat16)
 
-    K, V = K.unsqueeze(-2), V.unsqueeze(-1)
-    kv_state = (K * V).cumsum(dim=2)
-    last_kv_state = kv_state[:, :, -1].transpose(2, 3)
-    return out, last_kv_state
+    return out
 
-o, last_kv_state = pytorch_test(q, k, v, TESTNAME)
+o = pytorch_test(q, k, v, TESTNAME)
 
 with open(f'{TESTNAME}.txt', 'w') as f:
     qf = q.to(torch.float32).flatten().cpu().numpy()
     kf = k.to(torch.float32).flatten().cpu().numpy()
     vf = v.to(torch.float32).flatten().cpu().numpy()
     of = o.to(torch.float32).flatten().cpu().numpy()
-    kv_statef = last_kv_state.to(torch.float32).flatten().cpu().numpy()
 
     for i in trange(B*H*N*D):
         f.write(repr(qf[i]))
@@ -70,9 +66,6 @@ with open(f'{TESTNAME}.txt', 'w') as f:
         f.write(' ')
     for i in trange(B*H*N*DV):
         f.write(repr(of[i]))
-        f.write(' ')
-    for i in trange(B*H*D*DV):
-        f.write(repr(kv_statef[i]))
         f.write(' ')
 
 

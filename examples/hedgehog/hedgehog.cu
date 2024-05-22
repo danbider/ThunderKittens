@@ -43,8 +43,8 @@ void hedgehog_attention(int n, const CUtensorMap* tma_q, const CUtensorMap* tma_
     // to hold 64 rows of q, k: 32k each = 65k
     // to hold 64 rows of v: 8k
 
-    tile_kv_smem (&kv_smem) = al.allocate<tile_kv_smem>(); // 32k
-    tile_kv2_smem (&kv2_smem) = al.allocate<tile_kv2_smem>(); // 32k
+    tile_kv_smem  (&kv_smem) = al.allocate<tile_kv_smem>(); // 8k
+    tile_kv2_smem (&kv_smem_store)[4] = *reinterpret_cast<tile_kv2_smem(*)[4]>(q_smem[0]); // 32k
 
     int warpid      = kittens::warpid();
     int warpgroupid = warpid/kittens::WARPGROUP_WARPS;
@@ -114,19 +114,19 @@ void hedgehog_attention(int n, const CUtensorMap* tma_q, const CUtensorMap* tma_
         }
         warpgroup::mma_async_wait();
         // copy old values
-        last_norm = norm;
-        copy(last_norm_vec, norm_vec);
+        // last_norm = norm;
+        // copy(last_norm_vec, norm_vec);
 
-        // get the diagonal for the normalization
-        diag(qk_diag, reinterpret_cast<rt_bf_1x1<>&>(local_attn.tiles[0][warpid]));
-        // sum onto norm. this is now contains the linear norm for future iterations.
-        sum(norm, qk_diag, last_norm);
+        // // get the diagonal for the normalization
+        // diag(qk_diag, reinterpret_cast<rt_bf_1x1<>&>(local_attn.tiles[0][warpid]));
+        // // sum onto norm. this is now contains the linear norm for future iterations.
+        // sum(norm, qk_diag, last_norm);
 
-        exp(local_attn, local_attn);
-        exp(qk_diag, qk_diag);
+        // exp(local_attn, local_attn);
+        // exp(qk_diag, qk_diag);
 
-        // add previous norm to get new normalization constants
-        add(norm_vec, qk_diag, norm);
+        // // add previous norm to get new normalization constants
+        // add(norm_vec, qk_diag, norm);
 
         copy(local_attn_bf, local_attn); // now stored in bf16
         // now make causal
@@ -171,15 +171,14 @@ void hedgehog_attention(int n, const CUtensorMap* tma_q, const CUtensorMap* tma_
     }
     #pragma unroll
     for(int j = 0; j < 4; j++) {
-        warpgroup::store(kv2_smem, local_kv[j]);
+        warpgroup::store(kv_smem_store[j], local_kv[j]);
         __syncthreads(); 
         if(warpid == 0) {
-            tma::store_async(tma_kv, kv2_smem, blockIdx.x*4 + j);
+            tma::store_async(tma_kv, kv_smem_store[j], blockIdx.x*4 + j);
             tma::store_commit_group();
         }
-        tma::store_async_wait();
-        __syncthreads(); 
     }
+    tma::store_async_wait();
 }
 
 

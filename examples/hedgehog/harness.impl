@@ -99,11 +99,11 @@ int main(int argc, char **argv) {
     cudaMemcpy(d_k, k_bf, TOTAL_ELEMENTS_QK * sizeof(bf16), cudaMemcpyHostToDevice);
     cudaMemcpy(d_v, v_bf, TOTAL_ELEMENTS_VO * sizeof(bf16), cudaMemcpyHostToDevice);
 
-    CUtensorMap* tma_q_d  = tma::allocate_and_create_tensor_map<tile_q_smem> (d_q,        ATTN_B*ATTN_H*ATTN_N/(tile_h * 16));
-    CUtensorMap* tma_k_d  = tma::allocate_and_create_tensor_map<tile_k_smem> (d_k,        ATTN_B*ATTN_H*ATTN_N/(tile_h * 16));
-    CUtensorMap* tma_v_d  = tma::allocate_and_create_tensor_map<tile_v_smem> (d_v,        ATTN_B*ATTN_H*ATTN_N/(tile_h * 16));
-    CUtensorMap* tma_o_d  = tma::allocate_and_create_tensor_map<tile_o_smem> (d_o,        ATTN_B*ATTN_H*ATTN_N/(tile_h * 16));
-    CUtensorMap* tma_kv_d = tma::allocate_and_create_tensor_map<tile_kv_smem>(d_kv_state, ATTN_B*ATTN_H*ATTN_N/(tile_w_qk * 16));
+    CUtensorMap* tma_q_d  = tma::allocate_and_create_tensor_map<tile_q_smem>  (d_q,        ATTN_B*ATTN_H*ATTN_N/(64), 4);
+    CUtensorMap* tma_k_d  = tma::allocate_and_create_tensor_map<tile_k_smem>  (d_k,        ATTN_B*ATTN_H*ATTN_N/(64), 4);
+    CUtensorMap* tma_v_d  = tma::allocate_and_create_tensor_map<tile_v_smem>  (d_v,        ATTN_B*ATTN_H*ATTN_N/(64));
+    CUtensorMap* tma_o_d  = tma::allocate_and_create_tensor_map<tile_o_smem>  (d_o,        ATTN_B*ATTN_H*ATTN_N/(64));
+    CUtensorMap* tma_kv_d = tma::allocate_and_create_tensor_map<tile_kv2_smem>(d_kv_state, ATTN_B*ATTN_H*(256/64));
     
     cudaDeviceSynchronize();
     CudaCheckError();
@@ -205,9 +205,6 @@ int main(int argc, char **argv) {
 
     if (total_diff > 0.05) {
         good = false;
-    }
-    else {
-        good = true;
     }
 
     std::cout << "Average execution time: " << std::chrono::duration_cast<std::chrono::microseconds>(finish - start).count() / ITER << " us" << std::endl;

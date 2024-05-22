@@ -35,11 +35,11 @@ int main(int argc, char **argv) {
     // create dummy variables that are the right size
     constexpr int TOTAL_ELEMENTS_QK       = ATTN_B*ATTN_H*ATTN_N*ATTN_D_QK;
     constexpr int TOTAL_ELEMENTS_VO       = ATTN_B*ATTN_H*ATTN_N*ATTN_D_VO;
-    constexpr int TOTAL_ELEMENTS_KV       = ATTN_B*ATTN_H*(ATTN_D_QK*ATTN_D_VO);
+    constexpr int TOTAL_ELEMENTS_KV       = ATTN_B*ATTN_H*(256*ATTN_D_VO);
 
     constexpr int TOTAL_UNIQUE_ELEMENTS_QK = ATTN_N*ATTN_D_QK;
     constexpr int TOTAL_UNIQUE_ELEMENTS_VO = ATTN_N*ATTN_D_VO;
-    constexpr int TOTAL_UNIQUE_ELEMENTS_KV = ATTN_D_QK*ATTN_D_VO;
+    constexpr int TOTAL_UNIQUE_ELEMENTS_KV = 256*ATTN_D_VO;
 
     float *q            = new float[TOTAL_UNIQUE_ELEMENTS_QK];
     float *k            = new float[TOTAL_UNIQUE_ELEMENTS_QK];
@@ -108,7 +108,7 @@ int main(int argc, char **argv) {
     cudaDeviceSynchronize();
     CudaCheckError();
     
-    unsigned long mem_size = kittens::MAX_SHARED_MEMORY; // have the flag tell us
+    unsigned long mem_size = kittens::MAX_SHARED_MEMORY-32000; // have the flag tell us
     std::cout << "Setting max block shared memory to " << mem_size << std::endl;
     
     using T = kittens::bf16;

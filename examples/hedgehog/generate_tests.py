@@ -34,10 +34,10 @@ else:
     print('Invalid test name')
     sys.exit(0)
 
-def pytorch_test(Q, K, V, TESTNAME='all'):
+def pytorch_test(Qi, Ki, V, TESTNAME='all'):
     
-    Q = torch.concatenate([torch.exp(-Q.to(torch.bfloat16)).to(torch.float32), torch.exp(Q.to(torch.bfloat16)).to(torch.float32)], dim=-1)
-    K = torch.concatenate([torch.exp(-K.to(torch.bfloat16)).to(torch.float32), torch.exp(K.to(torch.bfloat16)).to(torch.float32)], dim=-1)
+    Q = torch.concatenate([torch.exp(-Qi.to(torch.bfloat16)).to(torch.float32), torch.exp(Qi.to(torch.bfloat16)).to(torch.float32)], dim=-1)
+    K = torch.concatenate([torch.exp(-Ki.to(torch.bfloat16)).to(torch.float32), torch.exp(Ki.to(torch.bfloat16)).to(torch.float32)], dim=-1)
 
     def make_causal(X):
         (b,h,n,m) = X.shape
@@ -51,7 +51,7 @@ def pytorch_test(Q, K, V, TESTNAME='all'):
     K, V          = K.unsqueeze(-2), V.unsqueeze(-1)
     last_kv_state = (K * V).sum(dim=2).transpose(2, 3).to(torch.bfloat16).to(torch.float32)
 
-    return Q, K, out, last_kv_state
+    return Qi, Ki, out, last_kv_state
 
 Q, K, o, last_kv_state = pytorch_test(q, k, v, TESTNAME)
 
@@ -64,10 +64,10 @@ with open(f'{TESTNAME}.txt', 'w') as f:
     of  = o.to(torch.float32).flatten().cpu().numpy()
     kvf = last_kv_state.to(torch.float32).flatten().cpu().numpy()
 
-    for i in trange(B*H*N*D*2):
+    for i in trange(B*H*N*D):
         f.write(repr(qf[i]))
         f.write(' ')
-    for i in trange(B*H*N*D*2):
+    for i in trange(B*H*N*D):
         f.write(repr(kf[i]))
         f.write(' ')
     for i in trange(B*H*N*DV):

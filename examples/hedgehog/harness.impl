@@ -2,7 +2,7 @@
 #include <string>
 #include <fstream>
 
-#define ATTN_B 8
+#define ATTN_B 16
 #define ATTN_H 16
 #define ATTN_N 4096
 
@@ -108,7 +108,7 @@ int main(int argc, char **argv) {
     cudaDeviceSynchronize();
     CudaCheckError();
     
-    unsigned long mem_size = kittens::MAX_SHARED_MEMORY-32000; // have the flag tell us
+    unsigned long mem_size = kittens::MAX_SHARED_MEMORY/2; // have the flag tell us
     std::cout << "Setting max block shared memory to " << mem_size << std::endl;
     
     using T = kittens::bf16;
@@ -119,7 +119,7 @@ int main(int argc, char **argv) {
         mem_size
     );
 
-    const int ITER = 2;
+    const int ITER = 1;
     cudaDeviceSynchronize();
     CudaCheckError();
     std::cout << "Starting kernel\n";

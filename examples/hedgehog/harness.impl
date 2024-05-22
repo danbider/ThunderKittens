@@ -26,6 +26,26 @@ inline void __cudaCheckError( const char *file, const int line ) {
     }
 }
 
+void dump_cuda_memory_to_file(const bf16* cuda_memory, int num_elements, const std::string& filename) {
+    std::vector<bf16> host_data(num_elements);
+    cudaMemcpy(host_data.data(), cuda_memory, num_elements * sizeof(bf16), cudaMemcpyDeviceToHost);
+    CudaCheckError();
+
+    std::vector<float> float_data(num_elements);
+    for (int i = 0; i < num_elements; i++) {
+        float_data[i] = __bfloat162float(host_data[i]);
+    }
+
+    std::ofstream outfile(filename);
+    for (int i = 0; i < std::min(num_elements, 1 << 20); i++) {
+        outfile << float_data[i];
+        if ((i + 1) % 64 == 0) outfile << "\n";
+        else outfile << " ";
+    }
+    outfile.close();
+}
+
+
 int main(int argc, char **argv) {
     // TODO: consider doing sequential kernel launches to force batches dimension element to execute sequentially,
     // which may increase the probability of L2 cache hits on KV
@@ -68,25 +88,25 @@ int main(int argc, char **argv) {
         std::cout << "Starting to enter!" << std::endl;
 
         for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_QK; i++) infile >> q[i];
-        std::cout << "Finished loading Q" << std::endl;
+        std::cout << "Finished loading " << TOTAL_UNIQUE_ELEMENTS_QK << " elements of Q" << std::endl;
         
         for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_QK; i++) infile >> k[i];
-        std::cout << "Finished loading K" << std::endl;
+        std::cout << "Finished loading " << TOTAL_UNIQUE_ELEMENTS_QK << " elements of K" << std::endl;
         
         for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_VO; i++) infile >> v[i];
-        std::cout << "Finished loading V" << std::endl;
+        std::cout << "Finished loading " << TOTAL_UNIQUE_ELEMENTS_VO << " elements of V" << std::endl;
         
         for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_VO; i++) { infile >> o_ref[i]; }
-        std::cout << "Finished loading O_REF" << std::endl;
+        std::cout << "Finished loading " << TOTAL_UNIQUE_ELEMENTS_VO << " elements of O_REF" << std::endl;
         
         for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_KV; i++) { infile >> kv_state_ref[i]; }
-        std::cout << "Finished loading KV_STATE_REF" << std::endl;
+        std::cout << "Finished loading " << TOTAL_UNIQUE_ELEMENTS_KV << " elements of KV_STATE_REF" << std::endl;
 
         for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_QK_MAP; i++) { infile >> q_map[i]; }
-        std::cout << "Finished loading Q_MAP" << std::endl;
+        std::cout << "Finished loading " << TOTAL_UNIQUE_ELEMENTS_QK_MAP << " elements of Q_MAP " << q_map[0] << std::endl;
 
         for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_QK_MAP; i++) { infile >> k_map[i]; }
-        std::cout << "Finished loading K_MAP" << std::endl;
+        std::cout << "Finished loading " << TOTAL_UNIQUE_ELEMENTS_QK_MAP << " elements of K_MAP " << k_map[0] << std::endl;
 
         std::cout << "Finished loading file from " << argv[1] << "!" << std::endl;
     }
@@ -116,20 +136,22 @@ int main(int argc, char **argv) {
     cudaMemcpy(d_q, q_bf, TOTAL_ELEMENTS_QK * sizeof(bf16), cudaMemcpyHostToDevice);
     cudaMemcpy(d_k, k_bf, TOTAL_ELEMENTS_QK * sizeof(bf16), cudaMemcpyHostToDevice);
     cudaMemcpy(d_v, v_bf, TOTAL_ELEMENTS_VO * sizeof(bf16), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_q_map, q_map_bf, TOTAL_ELEMENTS_QK_MAP * sizeof(bf16), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_k_map, k_map_bf, TOTAL_ELEMENTS_QK_MAP * sizeof(bf16), cudaMemcpyHostToDevice);
 
-    CUtensorMap* tma_q_d  = tma::allocate_and_create_tensor_map<tile_q_smem>  (d_q,        ATTN_B*ATTN_H*ATTN_N/(64), 4);
-    CUtensorMap* tma_k_d  = tma::allocate_and_create_tensor_map<tile_k_smem>  (d_k,        ATTN_B*ATTN_H*ATTN_N/(64), 4);
+    CUtensorMap* tma_q_d  = tma::allocate_and_create_tensor_map<tile_q_smem>  (d_q,        ATTN_B*ATTN_H*ATTN_N/(64), 2);
+    CUtensorMap* tma_k_d  = tma::allocate_and_create_tensor_map<tile_k_smem>  (d_k,        ATTN_B*ATTN_H*ATTN_N/(64), 2);
     CUtensorMap* tma_v_d  = tma::allocate_and_create_tensor_map<tile_v_smem>  (d_v,        ATTN_B*ATTN_H*ATTN_N/(64));
     CUtensorMap* tma_o_d  = tma::allocate_and_create_tensor_map<tile_o_smem>  (d_o,        ATTN_B*ATTN_H*ATTN_N/(64));
     CUtensorMap* tma_kv_d = tma::allocate_and_create_tensor_map<tile_kv2_smem>(d_kv_state, ATTN_B*ATTN_H*(256/64));
 
-    CUtensorMap* tma_q_map_d = tma::allocate_and_create_tensor_map<tile_q_map_smem>(d_q_map, ATTN_B*ATTN_H*ATTN_N/(64), 4);
-    CUtensorMap* tma_k_map_d = tma::allocate_and_create_tensor_map<tile_k_map_smem>(d_k_map, ATTN_B*ATTN_H*ATTN_N/(64), 4);
+    CUtensorMap* tma_q_map_d = tma::allocate_and_create_tensor_map<tile_qf_smem>(d_q_map, ATTN_B*ATTN_H*ATTN_N/(64), 4);
+    CUtensorMap* tma_k_map_d = tma::allocate_and_create_tensor_map<tile_kf_smem>(d_k_map, ATTN_B*ATTN_H*ATTN_N/(64), 4);
     
     cudaDeviceSynchronize();
     CudaCheckError();
     
-    unsigned long mem_size = kittens::MAX_SHARED_MEMORY/2; // have the flag tell us
+    unsigned long mem_size = 229376-16 - 1000; // have the flag tell us
     std::cout << "Setting max block shared memory to " << mem_size << std::endl;
     
     using T = kittens::bf16;
@@ -146,7 +168,13 @@ int main(int argc, char **argv) {
     std::cout << "Starting kernel\n";
     const auto start = std::chrono::high_resolution_clock::now();
     for(int i = 0; i < ITER; i++) {
-        hedgehog_attention<<<ATTN_B*ATTN_H,NUM_THREADS,mem_size>>>(ATTN_N, tma_q_d, tma_k_d, tma_v_d, tma_o_d, tma_kv_d);
+        hedgehog_attention<<<ATTN_B*ATTN_H,NUM_THREADS,mem_size>>>(
+            ATTN_N,
+            tma_q_d, tma_k_d,
+            tma_q_map_d, tma_k_map_d,
+            tma_v_d,
+            tma_o_d, tma_kv_d
+        );
     }
     cudaDeviceSynchronize();
     const auto finish = std::chrono::high_resolution_clock::now();
@@ -159,7 +187,7 @@ int main(int argc, char **argv) {
         o[i] = __bfloat162float(o_bf[i]);
     }
 
-    bool good = true;
+    bool good = true, catastrophe = false;
     std::ofstream o_ref_file("printouts/o_ref.txt");
     std::ofstream o_file("printouts/o.txt");
     std::ofstream diff_file("printouts/diff.txt");
@@ -178,6 +206,11 @@ int main(int argc, char **argv) {
         }
         if(abs(diff) > 0.05 || isnan(diff)) {
             good = false;
+        }
+        if(!catastrophe && (abs(diff) > 100 || isnan(diff))) {
+            std::cout << "catastrophic error detected in batch #" << i/TOTAL_UNIQUE_ELEMENTS_VO << std::endl;
+            catastrophe = true;
+            std::cout << catastrophe << std::endl;
         }
 
         total_diff += abs(diff);
@@ -231,6 +264,12 @@ int main(int argc, char **argv) {
     std::cout << "Average execution time: " << std::chrono::duration_cast<std::chrono::microseconds>(finish - start).count() / ITER << " us" << std::endl;
     if(good) std::cout << "Correct :)\n";
     else std::cout << "Incorrect :(\n";
+
+    dump_cuda_memory_to_file(d_q, TOTAL_ELEMENTS_QK, "printouts/q_in.txt");
+    dump_cuda_memory_to_file(d_k, TOTAL_ELEMENTS_QK, "printouts/k_in.txt");
+    dump_cuda_memory_to_file(d_v, TOTAL_ELEMENTS_VO, "printouts/v_in.txt");
+    dump_cuda_memory_to_file(d_q_map, TOTAL_ELEMENTS_QK_MAP, "printouts/q_map_in.txt");
+    dump_cuda_memory_to_file(d_k_map, TOTAL_ELEMENTS_QK_MAP, "printouts/k_map_in.txt");
 
     cudaFree(d_q);
     cudaFree(d_k);

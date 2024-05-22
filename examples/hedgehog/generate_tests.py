@@ -36,8 +36,14 @@ else:
 
 def pytorch_test(Qi, Ki, V, TESTNAME='all'):
     
-    Q = torch.concatenate([torch.exp(-Qi.to(torch.bfloat16)).to(torch.float32), torch.exp(Qi.to(torch.bfloat16)).to(torch.float32)], dim=-1)
-    K = torch.concatenate([torch.exp(-Ki.to(torch.bfloat16)).to(torch.float32), torch.exp(Ki.to(torch.bfloat16)).to(torch.float32)], dim=-1)
+    Qc = torch.concatenate([torch.exp(-Qi.to(torch.bfloat16)).to(torch.float32), torch.exp(Qi.to(torch.bfloat16)).to(torch.float32)], dim=-1)
+    Kc = torch.concatenate([torch.exp(-Ki.to(torch.bfloat16)).to(torch.float32), torch.exp(Ki.to(torch.bfloat16)).to(torch.float32)], dim=-1)
+
+    # create a block-diagonal matrix of size (Qc.shape[2]. Qc.shape[2]), where each block is 64x64
+    n = Qc.shape[2]
+    block_size = 64
+    num_blocks = n // block_size
+    mask = torch.block_diag(*[torch.ones(block_size, block_size) for _ in range(num_blocks)]).to('cuda').reshape((1,1,n,n))
 
     def make_causal(X):
         (b,h,n,m) = X.shape
@@ -45,13 +51,22 @@ def pytorch_test(Qi, Ki, V, TESTNAME='all'):
         X[mask] = 0.
         return X
 
-    ATT = make_causal(torch.einsum("bhnd,bhmd->bhnm", Q, K))
+    # apply the mask to zero out off-diagonal blocks
+    lin_ATT = make_causal(torch.einsum("bhnd,bhmd->bhnm", Qc, Kc)*(1-mask))
+    exp_ATT = make_causal(torch.exp(torch.einsum("bhnd,bhmd->bhnm", Qi, Ki))*mask)
+    # norm = exp_ATT.max(dim=-1, keepdims=True)[0]
+
+    ATT = lin_ATT + exp_ATT
+    print(lin_ATT[0,0,0].cpu().tolist())
+    print(lin_ATT[0,0,67].cpu().tolist())
+    print(lin_ATT[0,0,127].cpu().tolist())
+    ATT = ATT / ATT.sum(dim=-1, keepdims=True)
     out = torch.einsum("bhnm,bhmd->bhnd", ATT, V).to(torch.bfloat16)
     
-    K, V          = K.unsqueeze(-2), V.unsqueeze(-1)
+    K, V          = Kc.unsqueeze(-2), V.unsqueeze(-1)
     last_kv_state = (K * V).sum(dim=2).transpose(2, 3).to(torch.bfloat16).to(torch.float32)
 
-    return Qi, Ki, Q, K, out, last_kv_state
+    return Qi, Ki, Qc, Kc, out, last_kv_state
 
 Q, K, Q_map, K_map, o, last_kv_state = pytorch_test(q, k, v, TESTNAME)
 
@@ -82,10 +97,10 @@ with open(f'{TESTNAME}.txt', 'w') as f:
     for i in trange(B*H*D*DV*2):
         f.write(repr(kvf[i]))
         f.write(' ')
-    for i in trange(B*H*N*DV):
+    for i in trange(B*H*N*D*2):
         f.write(repr(q_map[i]))
         f.write(' ')
-    for i in trange(B*H*N*DV):
+    for i in trange(B*H*N*D*2):
         f.write(repr(k_map[i]))
         f.write(' ')
 

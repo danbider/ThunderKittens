@@ -9,7 +9,11 @@
 
 #define NUM_WORKERS 8
 #define NUM_WARPGROUPS (NUM_WORKERS/(kittens::WARPGROUP_WARPS))
+
+#define qo_height 4
+#define kv_height 8
 #define NUM_WORKERS_KV 1
+#define tile_width 64/16
 
 using namespace kittens;
 
@@ -18,34 +22,23 @@ using layout_k = ducks::st_layout::wgmma_swizzle;
 using layout_v = ducks::st_layout::wgmma_interleave; 
 using layout_o = ducks::st_layout::swizzle;
 
-template<int D> struct fwd_attend_ker_tile_dims {
-    constexpr static int tile_width = D/kittens::TILE_DIM;
-    constexpr static int qo_height  = 4;
-    constexpr static int kv_height  = 512/D;
-};
-
-template<int D>
 __global__  __launch_bounds__((NUM_WORKERS)*kittens::WARP_THREADS, 2)
 void attend_ker_fwd_train(const int N, CUtensorMap* tma_q, CUtensorMap* tma_k, CUtensorMap* tma_v, CUtensorMap* tma_o, CUtensorMap* tma_l) {
     extern __shared__ int __shm[]; // this is the CUDA shared memory
     tma_swizzle_allocator al((int*)&__shm[0]);
 
-    constexpr int tile_width = fwd_attend_ker_tile_dims<D>::tile_width; // constants
-    constexpr int qo_height  = fwd_attend_ker_tile_dims<D>::qo_height;
-    constexpr int kv_height  = fwd_attend_ker_tile_dims<D>::kv_height;
-
     st_bf<qo_height, tile_width, layout_q>          (&q_smem)   [NUM_WARPGROUPS] = al.allocate<st_bf<qo_height, tile_width, layout_q>,          NUM_WARPGROUPS>();
     st_bf<kv_height, tile_width, layout_k>          (&k_smem)[2][NUM_WORKERS_KV] = al.allocate<st_bf<kv_height, tile_width, layout_k>, 2,       NUM_WORKERS_KV>();
     st_bf<kv_height, tile_width, layout_v>          (&v_smem)[2][NUM_WORKERS_KV] = al.allocate<st_bf<kv_height, tile_width, layout_v>, 2,       NUM_WORKERS_KV>();
-    col_vec<st_bf<qo_height, tile_width, layout_o>> (&l_smem)   [NUM_WARPGROUPS] = al.allocate<st_bf<qo_height, tile_width, layout_o>::col_vec, NUM_WARPGROUPS>();
+    st_bf<qo_height, tile_width, layout_o>::col_vec (&l_smem)   [NUM_WARPGROUPS] = al.allocate<st_bf<qo_height, tile_width, layout_o>::col_vec, NUM_WARPGROUPS>();
 
     int tic = 0, toc = 1;
  
     rt_fl<1, kv_height> att_block;
     rt_bf<1, kv_height> att_block_mma;
     rt_fl<1, tile_width> o_prev;
-    col_vec<rt_fl<1, kv_height>> max_vec_last, max_vec;
-    col_vec<rt_fl<1, kv_height>> norm_vec_last, norm_vec;
+    rt_fl<1, kv_height>::col_vec max_vec_last, max_vec;
+    rt_fl<1, kv_height>::col_vec norm_vec_last, norm_vec;
 
     int warpid      = kittens::warpid();
     int warpgroupid = warpid/kittens::WARPGROUP_WARPS;

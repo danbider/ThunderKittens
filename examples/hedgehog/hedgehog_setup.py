@@ -2,7 +2,7 @@
 # https://pytorch.org/tutorials/advanced/cpp_extension.html
 import torch
 name = "hedgehog"
-gpu = 'A100'
+gpu = 'H100'
 assert(gpu in ['4090', 'A100', 'H100'])
 
 import test_build_utils as tbu

@@ -1,5 +1,13 @@
-# include "src/kittens.cuh"
+#define TORCH_COMPILE // defined by default for PyTorch bindings - to use cpp harness, comment this out
+
+#ifdef TORCH_COMPILE
+#include "src/kittens.cuh"
+#else
+#include "../../src/kittens.cuh"
+#endif
+
 #include <cuda/pipeline>
+#include <cooperative_groups.h>
 
 using namespace kittens;
 
@@ -66,11 +74,11 @@ void hedgehog_attention(int n,
     extern __shared__ int __shm[]; // this is the CUDA shared memory
     tma_swizzle_allocator al((int*)&__shm[0]);
 
-    tile_q_smem  (&q_smem)[2][2]  = al.allocate<tile_q_smem, 2, 2>(); // 16k * 2 (tictoc)
-    tile_k_smem  (&k_smem)[2][2]  = al.allocate<tile_k_smem, 2, 2>(); // 16k * 2 (tictoc)
+    tile_q_smem  (&q_smem)[2][2]  = al.allocate<tile_q_smem,  2, 2>(); // 16k * 2 (tictoc)
+    tile_k_smem  (&k_smem)[2][2]  = al.allocate<tile_k_smem,  2, 2>(); // 16k * 2 (tictoc)
     tile_qf_smem (&qf_smem)[2][4] = al.allocate<tile_qf_smem, 2, 4>(); // 32k * 2 (tictoc)
     tile_kf_smem (&kf_smem)[2][4] = al.allocate<tile_kf_smem, 2, 4>(); // 32k * 2 (tictoc)
-    tile_v_smem  (&v_smem)[2]     = al.allocate<tile_v_smem, 2>(); // 8k * 2 (tictoc)
+    tile_v_smem  (&v_smem)[2]     = al.allocate<tile_v_smem,  2   >(); // 8k * 2 (tictoc)
 
     tile_kv_smem  (&kv_smem) = al.allocate<tile_kv_smem>(); // 8k
     tile_o_smem   (&o_smem)  = reinterpret_cast<tile_o_smem&>(kv_smem);
@@ -278,4 +286,75 @@ void hedgehog_attention(int n,
 }
 
 
-#include "harness.impl"  // (comment out when using the code below)
+#ifdef TORCH_COMPILE
+#include "src/common/pyutils/torch_helpers.cuh"
+#include <iostream>
+
+void hedgehog_based_tk(torch::Tensor q, torch::Tensor k, torch::Tensor qf, torch::Tensor kf, torch::Tensor v, torch::Tensor o, torch::Tensor kv) {
+    
+    CHECK_INPUT(q); 
+    CHECK_INPUT(k); 
+    CHECK_INPUT(qf);
+    CHECK_INPUT(kf);
+    CHECK_INPUT(v); 
+    CHECK_INPUT(o);
+    CHECK_INPUT(kv);
+
+    auto batch = q.size(0);
+    auto heads = q.size(1);
+    auto N     = q.size(2);
+
+    auto DV    = v.size(3);
+    auto DQK   = q.size(3);
+    auto DQK_f = qf.size(3);
+
+    // convert to bf16 
+    c10::BFloat16 *q_ptr     = q.data_ptr<c10::BFloat16>();
+    c10::BFloat16 *k_ptr     = k.data_ptr<c10::BFloat16>();
+    c10::BFloat16 *qf_ptr    = qf.data_ptr<c10::BFloat16>();
+    c10::BFloat16 *kf_ptr    = kf.data_ptr<c10::BFloat16>();
+    c10::BFloat16 *v_ptr     = v.data_ptr<c10::BFloat16>();
+    c10::BFloat16 *o_ptr     = o.data_ptr<c10::BFloat16>();
+    c10::BFloat16 *kv_ptr    = kv.data_ptr<c10::BFloat16>();
+
+    const bf16* d_q          = reinterpret_cast<const bf16*>(q_ptr);
+    const bf16* d_k          = reinterpret_cast<const bf16*>(k_ptr);
+    const bf16* d_q_map      = reinterpret_cast<const bf16*>(qf_ptr);
+    const bf16* d_k_map      = reinterpret_cast<const bf16*>(kf_ptr);
+    const bf16* d_v          = reinterpret_cast<const bf16*>(v_ptr);
+          bf16* d_o          = reinterpret_cast<      bf16*>(o_ptr);
+          bf16* d_kv         = reinterpret_cast<      bf16*>(kv_ptr);
+    
+    CUtensorMap* tma_q_d     = tma::allocate_and_create_tensor_map<tile_q_smem>   (d_q,  batch*heads*N/(64), 2); 
+    CUtensorMap* tma_k_d     = tma::allocate_and_create_tensor_map<tile_k_smem>   (d_k,  batch*heads*N/(64), 2);
+    CUtensorMap* tma_v_d     = tma::allocate_and_create_tensor_map<tile_v_smem>   (d_v,  batch*heads*N/(64));
+    CUtensorMap* tma_o_d     = tma::allocate_and_create_tensor_map <tile_o_smem>  (d_o,  batch*heads*N/(64));
+    CUtensorMap* tma_kv_d    = tma::allocate_and_create_tensor_map<tile_kv2_smem> (d_kv, batch*heads*(256/64)); 
+
+    CUtensorMap* tma_q_map_d = tma::allocate_and_create_tensor_map<tile_qf_smem>  (d_q_map, batch*heads*N/(64), 4);
+    CUtensorMap* tma_k_map_d = tma::allocate_and_create_tensor_map<tile_kf_smem>  (d_k_map, batch*heads*N/(64), 4);
+
+    unsigned long mem_size = 229376-16 - 1000;
+    
+    using T = kittens::bf16;
+    using H = kittens::bf16;
+    cudaFuncSetAttribute(
+        hedgehog_attention,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        mem_size
+    );
+
+    hedgehog_attention<<<batch*heads,NUM_THREADS,mem_size>>>(
+        N,
+        tma_q_d, tma_k_d,
+        tma_q_map_d, tma_k_map_d,
+        tma_v_d,
+        tma_o_d, tma_kv_d
+    );
+
+    CHECK_CUDA_ERROR(cudaGetLastError());
+}
+
+#else
+#include "harness_h100_fwd.impl"
+#endif

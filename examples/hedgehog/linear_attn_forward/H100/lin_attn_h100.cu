@@ -5,12 +5,55 @@
 #define NUM_THREADS (NUM_WORKERS*kittens::WARP_THREADS)
 #define NUM_WARPGROUPS (NUM_WORKERS/kittens::WARPGROUP_WARPS)
 
-#define ATTN_D 128
-#define ATTN_F 256
-
 using namespace kittens;
 
-using layout = kittens::ducks::st_layout::swizzle;
+template<ducks::rt::row_layout RT>
+__device__ static inline void wg_make_causal(RT &dst, const RT &src, const typename base_types::packing<typename RT::dtype>::unpacked_type &val=0) {
+    const typename RT::dtype packed_val = base_types::packing<typename RT::dtype>::pack(val);
+    #pragma unroll
+    for(int i = 0; i < dst.height; i++) {
+        #pragma unroll
+        for(int j = 0; j < dst.width; j++) {
+
+            if(j < ((warpid() % kittens::WARPGROUP_WARPS) * dst.height) + i) { // below the diagonal, copy
+                #pragma unroll
+                for(int k = 0; k < dst.packed_per_tile; k++) {
+                    dst.tiles[i][j].data[k] = src.tiles[i][j].data[k];
+                }
+            }
+            else if(j > ((warpid() % kittens::WARPGROUP_WARPS) * dst.height) + i) { // above the diagonal, zero
+                #pragma unroll
+                for(int k = 0; k < dst.packed_per_tile; k++) {
+                    dst.tiles[i][j].data[k] = packed_val;
+                }
+            }
+            else { // on the diagonal, interesting!
+                constexpr uint32_t MASK_X = 0xFF773311, MASK_Y = 0xF7733110; // magic numbers for on-diagonal core matrices
+                dst.tiles[i][j].data[1] = src.tiles[i][j].data[1]; // below diagonal, copy
+                dst.tiles[i][j].data[2] = packed_val; // above diagonal, zero
+                if((MASK_X >> laneid()) & 1) {
+                    dst.tiles[i][j].data[0].x = src.tiles[i][j].data[0].x;
+                    dst.tiles[i][j].data[3].x = src.tiles[i][j].data[3].x;
+                }
+                else {
+                    dst.tiles[i][j].data[0].x = val;
+                    dst.tiles[i][j].data[3].x = val;
+                }
+                if((MASK_Y >> laneid()) & 1) {
+                    dst.tiles[i][j].data[0].y = src.tiles[i][j].data[0].y;
+                    dst.tiles[i][j].data[3].y = src.tiles[i][j].data[3].y;
+                }
+                else {
+                    dst.tiles[i][j].data[0].y = val;
+                    dst.tiles[i][j].data[3].y = val;
+                }
+            }
+        }
+    }
+}
+
+#define ATTN_D 128
+#define ATTN_F 256
 
 #define tile_q_smem   st_bf<4, 4, wgmma_interleave_l>   
 #define tile_k_smem   st_bf<4, 4, wgmma_interleave_l>  
@@ -30,7 +73,7 @@ void hedgehog_linear_attention(int n, const CUtensorMap* tma_q, const CUtensorMa
     tile_kv_smem (&kv_smem)[4] = al.allocate<tile_kv_smem, 4>(); // 65k
 
     int warpid      = kittens::warpid(); 
-    int warpgroupid = warpid/kittens::WARPGROUP_WARPS; 
+    int warpgroupid = warpid/kittens::WARPGROUP_WARPS;
 
     int tic = 0, toc = 1; 
     __shared__ uint64_t qkv_barrier; 
@@ -43,11 +86,11 @@ void hedgehog_linear_attention(int n, const CUtensorMap* tma_q, const CUtensorMa
     }
 
     for (int block = 0; block < blocks; block++, tic^=1, toc^=1) {
-        rt_fl<1, 4> local_attn; 
-        rt_bf<1, 4> local_attn_bf; 
+        rt_fl<1, 4>          local_attn; 
+        rt_bf<1, 4>          local_attn_bf; 
 
-        rt_fl<1, 8> local_o; 
-        rt_bf<1, 8> kv_bf[4];
+        rt_fl<1, 8>          local_o; 
+        rt_bf<1, 8>          kv_bf[4];
 
         if (warpid == 0) {
             if (block == 0) {
@@ -75,9 +118,9 @@ void hedgehog_linear_attention(int n, const CUtensorMap* tma_q, const CUtensorMa
 
         for (int d = 0; d < 4; d++) {
             warpgroup::exp(q_smem[d], q_smem[d]); 
-            warpgroup::exp(k_smem[d], k_smem[d]); 
+            warpgroup::exp(k_smem[d], k_smem[d]);
         }
-        __syncthreads();
+        __syncthreads(); 
 
         zero(local_attn); 
         warpgroup::mma_fence(local_attn); 
@@ -89,12 +132,8 @@ void hedgehog_linear_attention(int n, const CUtensorMap* tma_q, const CUtensorMa
 
         __syncthreads();
         // now make causal
-        #pragma unroll
-        for(int j = 0; j < 4; j++) {
-            auto &attn_subtile = reinterpret_cast<rt_fl_1x1<>&>(local_attn.tiles[0][j]);
-            if (j>warpid) zero(attn_subtile);
-            else if (j==warpid) make_causal(attn_subtile, attn_subtile, kittens::base_types::constants<float>::zero());
-        }
+        wg_make_causal(local_attn, local_attn, 0);
+        __syncthreads();
 
         copy(local_attn_bf, local_attn); 
         warpgroup::mma_fence(local_o); 
@@ -110,11 +149,14 @@ void hedgehog_linear_attention(int n, const CUtensorMap* tma_q, const CUtensorMa
             warpgroup::mma_fence(local_o); 
             warpgroup::mma_AB(local_o, q_smem[rt], kv_smem[rt]); 
             warpgroup::mma_commit_group();
+            warpgroup::mma_async_wait(); 
+            __syncthreads();
 
             warpgroup::mma_fence(local_kv[rt]); 
             warpgroup::mma_AtB(local_kv[rt], k_smem[rt], v_smem[0]); 
             warpgroup::mma_commit_group(); 
             warpgroup::mma_async_wait(); 
+            __syncthreads();
         }
 
         warpgroup::store(v_smem[0], local_o); 
@@ -126,6 +168,7 @@ void hedgehog_linear_attention(int n, const CUtensorMap* tma_q, const CUtensorMa
             tma::store_commit_group(); 
         }
         tma::store_async_wait(); 
+        __syncthreads();
     }
 
     for (int rt = 0; rt < 4; rt++) {

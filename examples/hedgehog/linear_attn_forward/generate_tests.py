@@ -14,14 +14,18 @@ D = 128
 N = int(sys.argv[1])
 
 torch.random.manual_seed(42)
-q = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda')/float(D)**.5).to(torch.float32)
-k = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda')/float(D)**.5).to(torch.float32)
-v = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda')/D).to(torch.float32)
+q = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda'))
+k = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda'))
+v = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda'))
+
+q = q / 1000
+k = k / 1000
+v = v / 1000
 
 def pytorch_test(Q, K, V): 
     
-    Q = torch.cat([torch.exp(-Q.to(torch.bfloat16)).to(torch.float32), torch.exp(Q.to(torch.bfloat16)).to(torch.float32)], dim=-1)
-    K = torch.cat([torch.exp(-K.to(torch.bfloat16)).to(torch.float32), torch.exp(K.to(torch.bfloat16)).to(torch.float32)], dim=-1)
+    Q = torch.concatenate([torch.exp(Q.to(torch.bfloat16)), torch.exp(-Q.to(torch.bfloat16))], dim=-1)
+    K = torch.concatenate([torch.exp(K.to(torch.bfloat16)), torch.exp(-K.to(torch.bfloat16))], dim=-1)
 
     def make_causal(X):
         (b,h,n,m) = X.shape
@@ -30,7 +34,11 @@ def pytorch_test(Q, K, V):
         return X
 
     ATT = make_causal(torch.einsum("bhnd,bhmd->bhnm", Q, K))
+    norm = ATT.sum(dim=-1, keepdim=True)
     out = torch.einsum("bhnm,bhmd->bhnd", ATT, V).to(torch.bfloat16)
+    
+    # normalize attention
+    # out = out / (norm + 1e-6)
     
     K, V = K.unsqueeze(-2), V.unsqueeze(-1)
     kv_state = (K * V).cumsum(dim=2)
@@ -74,7 +82,7 @@ with open(f'randn.txt', 'w') as f:
     for i in trange(B*H*N*D):
         f.write(repr(of[i]))
         f.write(' ')
-    for i in trange(B*H*D*2*D):
+    for i in trange(B*H*2*D*D):
         f.write(repr(kv[i]))
         f.write(' ')
 

@@ -9,35 +9,16 @@ B = 1
 H = 1
 N = 4096
 D = 128
-DV = 64
-
-TESTNAME = sys.argv[1]
-
-if TESTNAME in ['ones']:
-    q = (torch.ones((B, H, N, D), dtype=torch.bfloat16, device='cuda')).to(torch.float32)
-    k = (torch.ones((B, H, N, D), dtype=torch.bfloat16, device='cuda')).to(torch.float32)
-    v = (torch.ones((B, H, N, DV), dtype=torch.bfloat16, device='cuda')).to(torch.float32)
-elif TESTNAME in ['twos']:
-    q = (torch.ones((B, H, N, D), dtype=torch.bfloat16, device='cuda')*2).to(torch.float32)
-    k = (torch.ones((B, H, N, D), dtype=torch.bfloat16, device='cuda')*2).to(torch.float32)
-    v = (torch.ones((B, H, N, DV), dtype=torch.bfloat16, device='cuda')).to(torch.float32)
-elif TESTNAME in ['arange']:
-    q = (torch.ones(B*H*N*D, dtype=torch.bfloat16, device='cuda').reshape(B, H, N, D)).to(torch.float32)/(D*DV)
-    k = (torch.arange(B*H*N*D, dtype=torch.bfloat16, device='cuda').reshape(B, H, N, D)).to(torch.float32)/(D*DV*2)
-    v = (torch.ones(B*H*N*DV, dtype=torch.bfloat16, device='cuda').reshape(B, H, N, DV)).to(torch.float32)
-elif TESTNAME in ['randn']:
-    torch.random.manual_seed(42)
-    q = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda')/float(D)**.5).to(torch.float32)
-    k = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda')/float(D)**.5).to(torch.float32)
-    v = (torch.randn((B, H, N, DV), dtype=torch.bfloat16, device='cuda')/DV).to(torch.float32)
-else:
-    print('Invalid test name')
-    sys.exit(0)
-
-def pytorch_test(Qi, Ki, V, TESTNAME='all'):
     
-    Qc = torch.concatenate([torch.exp(-Qi.to(torch.bfloat16)).to(torch.float32), torch.exp(Qi.to(torch.bfloat16)).to(torch.float32)], dim=-1)
-    Kc = torch.concatenate([torch.exp(-Ki.to(torch.bfloat16)).to(torch.float32), torch.exp(Ki.to(torch.bfloat16)).to(torch.float32)], dim=-1)
+torch.random.manual_seed(42)
+q = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda')/float(D)**.5).to(torch.float32)
+k = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda')/float(D)**.5).to(torch.float32)
+v = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda')/float(D)**.5).to(torch.float32)
+
+def pytorch_test(Q, K, V, a, b, w): 
+    
+    Q_f = torch.concatenate([torch.exp(-Q.to(torch.bfloat16)).to(torch.float32), torch.exp(Q.to(torch.bfloat16)).to(torch.float32)], dim=-1)
+    K_f = torch.concatenate([torch.exp(-K.to(torch.bfloat16)).to(torch.float32), torch.exp(K.to(torch.bfloat16)).to(torch.float32)], dim=-1)
 
     # create a block-diagonal matrix of size (Qc.shape[2]. Qc.shape[2]), where each block is 64x64
     n = Qc.shape[2]

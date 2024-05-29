@@ -14,31 +14,26 @@ D = 128
 N = int(sys.argv[1])
 
 torch.random.manual_seed(42)
-q = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda'))
-k = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda'))
+q = (torch.randn((B, H, N, D*2), dtype=torch.bfloat16, device='cuda'))
+k = (torch.randn((B, H, N, D*2), dtype=torch.bfloat16, device='cuda'))
 v = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda'))
 
-q = q / 1000
-k = k / 1000
-v = v / 1000
+q = q/(float(D))
+k = k/(float(D))
+v = v/(float(D))
 
 def pytorch_test(Q, K, V): 
     
-    Q = torch.concatenate([torch.exp(Q.to(torch.bfloat16)), torch.exp(-Q.to(torch.bfloat16))], dim=-1)
-    K = torch.concatenate([torch.exp(K.to(torch.bfloat16)), torch.exp(-K.to(torch.bfloat16))], dim=-1)
-
-    def make_causal(X):
-        (b,h,n,m) = X.shape
-        mask= ~(torch.arange(n).view(1,1,n,1) >= torch.arange(n).view(1,1,1,n)).expand(b,h,n,n)
-        X[mask] = 0.
-        return X
-
-    ATT = make_causal(torch.einsum("bhnd,bhmd->bhnm", Q, K))
-    norm = ATT.sum(dim=-1, keepdim=True)
-    out = torch.einsum("bhnm,bhmd->bhnd", ATT, V).to(torch.bfloat16)
+    causal = True
     
-    # normalize attention
-    # out = out / (norm + 1e-6)
+    a = torch.einsum('bhmd,bhnd->bhmn', Q, K)  # note we don't scale, tho we could
+    if causal:  # Apply causal mask
+        m, n = a.shape[-2:]
+        causal_mask = torch.ones((m, n), device = a.device, dtype = torch.bool).triu(n - m + 1)
+        a = a.masked_fill(causal_mask, 0)
+        
+    # a = a / (a.sum(dim=-1, keepdim=True))
+    out = torch.einsum('bhmn,bhnd->bhmd', a, V).to(torch.bfloat16)
     
     K, V = K.unsqueeze(-2), V.unsqueeze(-1)
     kv_state = (K * V).cumsum(dim=2)
@@ -47,6 +42,12 @@ def pytorch_test(Q, K, V):
     return out, last_kv_state
 
 o, kv_state = pytorch_test(q, k, v)
+
+avg_o = torch.mean(torch.abs(o))
+avg_kv = torch.mean(torch.abs(kv_state))
+
+print(f"1/100 of Avg mag of o: {avg_o.item()/100}")
+print(f"1/100 of Avg mag of kv: {avg_kv.item()/100}")
 
 print("-" * 80)
 # print B, H, N, D
@@ -70,10 +71,10 @@ with open(f'randn.txt', 'w') as f:
     vf = v.to(torch.float32).flatten().cpu().numpy()
     of = o.to(torch.float32).flatten().cpu().numpy()
     kv = kv_state.to(torch.float32).flatten().cpu().numpy()
-    for i in trange(B*H*N*D):
+    for i in trange(B*H*N*D*2):
         f.write(repr(qf[i]))
         f.write(' ')
-    for i in trange(B*H*N*D):
+    for i in trange(B*H*N*D*2):
         f.write(repr(kf[i]))
         f.write(' ')
     for i in trange(B*H*N*D):

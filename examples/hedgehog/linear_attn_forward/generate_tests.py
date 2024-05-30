@@ -13,14 +13,24 @@ D = 128
 # accept arg for N 
 N = int(sys.argv[1])
 
-torch.random.manual_seed(42)
-q = (torch.randn((B, H, N, D*2), dtype=torch.bfloat16, device='cuda'))
-k = (torch.randn((B, H, N, D*2), dtype=torch.bfloat16, device='cuda'))
+torch.random.manual_seed(46)
+q = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda'))
+k = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda'))
 v = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda'))
 
 q = q/(float(D))
 k = k/(float(D))
 v = v/(float(D))
+
+q_max = torch.amax(q, dim=-1, keepdim=True)
+q = torch.cat([
+    torch.exp(q - q_max), torch.exp(-q + q_max)
+], dim=-1)
+
+k_max = torch.amax(k, dim=-1, keepdim=True)
+k = torch.cat([
+    torch.exp(k - k_max), torch.exp(-k + k_max)
+], dim=-1)
 
 def pytorch_test(Q, K, V): 
     
@@ -31,8 +41,11 @@ def pytorch_test(Q, K, V):
         m, n = a.shape[-2:]
         causal_mask = torch.ones((m, n), device = a.device, dtype = torch.bool).triu(n - m + 1)
         a = a.masked_fill(causal_mask, 0)
-        
-    # a = a / (a.sum(dim=-1, keepdim=True))
+    
+    # Normalize to compute attention
+    # a = a / (torch.einsum("bhld,bhld->bhl", q, k.cumsum(dim=2)))[..., None]
+    a = a / (a.sum(dim=-1, keepdim=True))
+    
     out = torch.einsum('bhmn,bhnd->bhmd', a, V).to(torch.bfloat16)
     
     K, V = K.unsqueeze(-2), V.unsqueeze(-1)

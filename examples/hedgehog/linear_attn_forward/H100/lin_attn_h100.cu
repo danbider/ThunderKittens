@@ -1,4 +1,4 @@
-// #define TORCH_COMPILE // defined by default for PyTorch bindings - to use cpp harness, comment this out
+#define TORCH_COMPILE // defined by default for PyTorch bindings - to use cpp harness, comment this out
 
 #include "src/kittens.cuh"
 
@@ -15,79 +15,27 @@ template<ducks::st::all ST>
 __device__ inline void cumulative_add(ST &dst, const ST &inc) {
     // first do a reduction for each col
     constexpr int responsible_elements = (ST::cols + kittens::WARP_THREADS - 1) / kittens::WARP_THREADS;
-    float acc[responsible_elements]; 
+    float acc[responsible_elements];
 
-    // acc is just equal to the last row of dst
+    // acc equal to the last row of dst
     for (auto i = 0; i < responsible_elements; i++) {
         auto col = (kittens::laneid() + (i * kittens::WARP_THREADS));
         if (col < dst.cols) {
-            acc[i] = __bfloat162float(dst.data[col + ((dst.rows-1) * dst.cols)]);
-        }
-    }
-    __syncwarp();
-
-    for (auto row = 0; row < dst.rows; row++) {
-        // now add in the increment for each row in the dst tile
-        for (auto i = 0; i < responsible_elements; i++) {
-            auto col = (kittens::laneid() + (i * kittens::WARP_THREADS));
-            if (col < dst.cols) {
-                acc[i] += __bfloat162float(inc.data[col + (row * inc.cols)]);
-                dst.data[col + (row * dst.cols)] = __float2bfloat16(acc[i]);
+            acc[i] = __bfloat162float(dst.data[(dst.rows - 1) * dst.cols + col]);
+            __syncwarp();
+            for (auto row = 0; row < dst.rows; row++) {
+                acc[i] += __bfloat162float(inc.data[row * inc.cols + col]);
+                dst.data[row * dst.cols + col] = __float2bfloat16(acc[i]);
             }
         }
-    }
-    __syncwarp();
-}
-
-template<ducks::rt::row_layout RT>
-__device__ static inline void mask_diag(RT &dst, const RT &src, const typename base_types::packing<typename RT::dtype>::unpacked_type &val=0) {
-    const typename RT::dtype packed_val = base_types::packing<typename RT::dtype>::pack(val);
-    #pragma unroll
-    for(int i = 0; i < dst.height; i++) {
-        #pragma unroll
-        for(int j = 0; j < dst.width; j++) {
-
-            if(j < ((warpid() % kittens::WARPGROUP_WARPS) * dst.height) + i) { // below the diagonal, zero
-                #pragma unroll
-                for(int k = 0; k < dst.packed_per_tile; k++) {
-                    dst.tiles[i][j].data[k] = packed_val; 
-                }
-            }
-            else if(j > ((warpid() % kittens::WARPGROUP_WARPS) * dst.height) + i) { // above the diagonal, zero
-                #pragma unroll
-                for(int k = 0; k < dst.packed_per_tile; k++) {
-                    dst.tiles[i][j].data[k] = packed_val;
-                }
-            }
-            else { // on the diagonal, interesting!
-                constexpr uint32_t MASK_X = 0xFF773311, MASK_Y = 0xF7733110; // magic numbers for on-diagonal core matrices
-                dst.tiles[i][j].data[1] = packed_val; // below diagonal, zero
-                dst.tiles[i][j].data[2] = packed_val; // above diagonal, zero
-                if((MASK_X >> laneid()) & 1) {
-                    dst.tiles[i][j].data[0].x = src.tiles[i][j].data[0].x;
-                    dst.tiles[i][j].data[3].x = src.tiles[i][j].data[3].x;
-                }
-                else {
-                    dst.tiles[i][j].data[0].x = val;
-                    dst.tiles[i][j].data[3].x = val;
-                }
-                if((MASK_Y >> laneid()) & 1) {
-                    dst.tiles[i][j].data[0].y = src.tiles[i][j].data[0].y;
-                    dst.tiles[i][j].data[3].y = src.tiles[i][j].data[3].y;
-                }
-                else {
-                    dst.tiles[i][j].data[0].y = val;
-                    dst.tiles[i][j].data[3].y = val;
-                }
-            }
-        }
+        __syncwarp();
     }
 }
 
 #define ATTN_D 128
 #define ATTN_F 256
 
-#define tile_q_smem   st_bf<4, 4, wgmma_swizzle_l>   
+#define tile_q_smem   st_bf<4, 4, wgmma_interleave_l>   
 #define tile_k_smem   st_bf<4, 4, wgmma_interleave_l>  
 #define tile_vo_smem  st_bf<4, 8, wgmma_interleave_l>    
 #define tile_kv_smem  st_bf<4, 8, wgmma_interleave_l>
@@ -104,8 +52,6 @@ void hedgehog_linear_attention(int n, const CUtensorMap* tma_q, const CUtensorMa
     tile_k_smem  (&k_c_smem) [4] = al.allocate<tile_k_smem,  4>(); // 32k
     tile_vo_smem (&v_smem)   [1] = al.allocate<tile_vo_smem, 1>(); // 16k
     tile_kv_smem (&kv_smem)      = al.allocate<tile_kv_smem   >();
-
-    st_bf<4, 4, naive_l> (&g_smem) [1] = al.allocate<st_bf<4, 4, naive_l>, 1>(); // 16k
 
     int warpid      = kittens::warpid(); 
     int warpgroupid = warpid/kittens::WARPGROUP_WARPS;
@@ -129,6 +75,9 @@ void hedgehog_linear_attention(int n, const CUtensorMap* tma_q, const CUtensorMa
     for (int block = 0; block < blocks; block++, tic^=1, toc^=1) {
         rt_fl<1, 4>          local_attn; 
         rt_bf<1, 4>          local_attn_bf; 
+
+        rt_fl<1, 4>          q_reg; 
+        rt_fl<1, 4>          k_c_reg;
 
         rt_fl<1, 8>          local_o; 
         rt_bf<1, 8>          kv_bf[4];
@@ -180,84 +129,27 @@ void hedgehog_linear_attention(int n, const CUtensorMap* tma_q, const CUtensorMa
             warpgroup::mma_AB(local_o, q_smem[rt], kv_smem); 
             warpgroup::mma_commit_group();
 
-            warpgroup::mma_fence(local_attn); 
-            warpgroup::mma_ABt(local_attn, q_smem[rt], k_c_smem[rt]);
-            warpgroup::mma_commit_group();
-
             warpgroup::mma_fence(local_kv[rt]); 
             warpgroup::mma_AtB(local_kv[rt], k_smem[rt], v_smem[0]); 
             warpgroup::mma_commit_group(); 
             warpgroup::mma_async_wait();
         }
 
+        __syncthreads();
         cumulative_add(k_c_smem[warpid], k_smem[warpid]);
         __syncthreads();
 
-        // if (threadIdx.x == 0 && block <= 1) {
-        //     // print out k_smem and k_c_smem
-        //     printf("block: %d\n", block);
-        //     printf("k_smem\n");
-        //     for (int w = 0; w < 1; w++) {
-        //         for (int r = 0; r < k_smem[w].rows; r++) {
-        //             for (int c = 0; c < k_smem[w].cols; c++) {
-        //                 printf("%f ", __bfloat162float(k_smem[w].data[c + r*k_smem[w].cols]));
-        //             }
-        //             printf("\n");
-        //         }
-        //         printf("\n");
-        //     }
-        //     printf("\n");
-        //     printf("k_c_smem\n");
-        //     for (int w = 0; w < 1; w++) {
-        //         for (int r = 0; r < k_c_smem[w].rows; r++) {
-        //             for (int c = 0; c < k_c_smem[w].cols; c++) {
-        //                 printf("%f ", __bfloat162float(k_c_smem[w].data[c + r*k_c_smem[w].cols]));
-        //             }
-        //             printf("\n");
-        //         }
-        //         printf("\n");
-        //     }
-        //     printf("\n");
-        // }
-        // __syncthreads(); 
-        __syncthreads();
-        warpgroup::store(g_smem[0], local_attn);
-        __syncthreads(); 
-        // print out v_smem[0]
-        if (threadIdx.x == 0 && block == 1) {
-            printf("block before: %d\n", block);
-            for (int r = 0; r < g_smem[0].rows; r++) {
-                for (int c = 0; c < g_smem[0].cols; c++) {
-                    printf("%f ", __bfloat162float(g_smem[0].data[c + r*g_smem[0].cols]));
-                }
-                printf("\n");
-            }
-            printf("\n");
+        zero(den_vec); 
+        for (auto rt = 0; rt < 4; rt++) {
+            warpgroup::load(q_reg, q_smem[rt]);
+            warpgroup::load(k_c_reg, k_c_smem[rt]);
+
+            mul(q_reg, q_reg, k_c_reg);
+            row_sum(den_vec, q_reg, den_vec);
+            __syncthreads(); 
         }
-        __syncthreads();
-
-        // zero(den_vec); 
-        mask_diag(local_attn, local_attn);
-
-        __syncthreads();
-        warpgroup::store(g_smem[0], local_attn);
-        __syncthreads(); 
-        // print out v_smem[0]
-        if (threadIdx.x == 0 && block == 1) {
-            printf("block after: %d\n", block);
-            for (int r = 0; r < g_smem[0].rows; r++) {
-                for (int c = 0; c < g_smem[0].cols; c++) {
-                    printf("%f ", __bfloat162float(g_smem[0].data[c + r*g_smem[0].cols]));
-                }
-                printf("\n");
-            }
-            printf("\n");
-        }
-        __syncthreads();
-
-
-        row_sum(den_vec, local_attn, den_vec);
-        div_row(local_o, local_o, den_vec); 
+        
+        div_row(local_o, local_o, den_vec);
 
         warpgroup::store(v_smem[0], local_o); 
         __syncthreads(); 

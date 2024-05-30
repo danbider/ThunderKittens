@@ -27,7 +27,7 @@ import torch
 import torch.nn as nn
 
 B = 1
-H = 32
+H = 1
 N = 4096
 D = 128
 
@@ -47,21 +47,35 @@ kv_state = (torch.zeros((B, H, D*2, D), dtype=torch.bfloat16, device='cuda'))
 o = torch.zeros((B, H, N, D), dtype=torch.bfloat16, device='cuda')
 
 def linear_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, kv_state: torch.Tensor, o: torch.Tensor) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+    
+    causal = True
+    
+    q_max = torch.amax(q, dim=-1, keepdim=True)
+    q = torch.cat([
+        torch.exp(q - q_max), torch.exp(-q + q_max)
+    ], dim=-1)
         
-        tk_kernel.hh_lin_tk(q, k, v, o, kv_state)
+    k_max = torch.amax(k, dim=-1, keepdim=True)
+    k = torch.cat([
+        torch.exp(k - k_max), torch.exp(-k + k_max)
+    ], dim=-1)
         
-        # q = torch.concatenate([torch.exp(q.to(torch.bfloat16)), torch.exp(-q.to(torch.bfloat16))], dim=-1)
-        # k = torch.concatenate([torch.exp(k.to(torch.bfloat16)), torch.exp(-k.to(torch.bfloat16))], dim=-1)
+    tk_kernel.hh_lin_tk(q, k, v, o, kv_state)
         
-        # o = o / (torch.einsum("bhld,bhld->bhl", q, k.cumsum(dim=2)))[..., None]
-        
-        return o, None, None
+    return o, kv_state, None
 
-def quadratic_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor = None,
+def quadratic_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
                         causal: bool = True) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
     
-    q = torch.concatenate([torch.exp(q.to(torch.bfloat16)), torch.exp(-q.to(torch.bfloat16))], dim=-1)
-    k = torch.concatenate([torch.exp(k.to(torch.bfloat16)), torch.exp(-k.to(torch.bfloat16))], dim=-1)
+    q_max = torch.amax(q, dim=-1, keepdim=True)
+    q = torch.cat([
+        torch.exp(q - q_max), torch.exp(-q + q_max)
+    ], dim=-1)
+    
+    k_max = torch.amax(k, dim=-1, keepdim=True)
+    k = torch.cat([
+        torch.exp(k - k_max), torch.exp(-k + k_max)
+    ], dim=-1)
     
     y = None
     a = torch.einsum('bhmd,bhnd->bhmn', q, k)  # note we don't scale, tho we could
@@ -70,22 +84,30 @@ def quadratic_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor = None
         causal_mask = torch.ones((m, n), device = a.device, dtype = torch.bool).triu(n - m + 1)
         a = a.masked_fill(causal_mask, 0)
     
-    # Normalize to compute attention
-    # a = a / (torch.einsum("bhld,bhld->bhl", q, k.cumsum(dim=2)))[..., None]
     a = a / (a.sum(dim=-1, keepdim=True))
     
-    if torch.isnan(a).sum() > 0:
-        breakpoint()
-    if v is not None:
-        y = torch.einsum('bhmn,bhnd->bhmd', a, v)
-    return y, a, None
+    y = torch.einsum('bhmn,bhnd->bhmd', a, v)
+    
+    kv_state = (k.unsqueeze(-2) * v.unsqueeze(-1)).sum(dim=2)
+    kv_state = kv_state.transpose(2, 3)
+    
+    return y, kv_state, None
 
-linear_out, _, _    = linear_attention(q, k, v, kv_state, o)
-quadratic_out, _, _ = quadratic_attention(q, k, v)
+linear_out, linear_kv_state, _    = linear_attention(q, k, v, kv_state, o)
+quadratic_out, quadratic_kv_state, _ = quadratic_attention(q, k, v)
 
-# print out max error
-print(f"Max error: {torch.max(torch.abs(linear_out - quadratic_out))}")
+print(linear_kv_state.shape)
+print(quadratic_kv_state.shape)
 
-print(linear_out[0, 0, 1024:1034, :4])
-print(quadratic_out[0, 0, 1024:1034, :4])
+# print out 1/100 of avg mag of o and kv_state
+print(f"1/100 of Avg mag of quadratic out: {torch.mean(torch.abs(quadratic_out)).item()/100}")
+
+# print max diff
+print(f"Max diff out: {torch.max(torch.abs(linear_out - quadratic_out)).item()}")
+# print avg diff
+print(f"Avg diff out: {torch.mean(torch.abs(linear_out - quadratic_out)).item()}")
+
+# print out the first 10 elements
+print(f"Linear out: {linear_out[0, 0, -10:, :4]}")
+print(f"Quadratic out: {quadratic_out[0, 0, -10:, :4]}")
 

@@ -163,6 +163,8 @@ int main(int argc, char **argv) {
         }
         if(abs(diff) > 0.05 || isnan(diff)) {
             good = false;
+            // print n idx of 
+            // printf("o = %f, o_ref = %f, diff = %f\n", o[i], o_ref[i % TOTAL_UNIQUE_ELEMENTS_VO], diff); 
         }
 
         total_o_diff += abs(diff); 

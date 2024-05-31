@@ -22,15 +22,13 @@ q = q/(float(D))
 k = k/(float(D))
 v = v/(float(D))
 
-q_max = torch.amax(q, dim=-1, keepdim=True)
 q = torch.cat([
-    torch.exp(q - q_max), torch.exp(-q + q_max)
-], dim=-1)
+    torch.softmax(q, dim=-1), torch.softmax(-q, dim=-1)
+], dim=-1).clamp(min=1e-6)
 
-k_max = torch.amax(k, dim=-1, keepdim=True)
 k = torch.cat([
-    torch.exp(k - k_max), torch.exp(-k + k_max)
-], dim=-1)
+    torch.softmax(k, dim=-1), torch.softmax(-k, dim=-1)
+], dim=-1).clamp(min=1e-6)
 
 def pytorch_test(Q, K, V): 
     

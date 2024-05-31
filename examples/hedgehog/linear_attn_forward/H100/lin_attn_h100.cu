@@ -1,4 +1,4 @@
-#define TORCH_COMPILE // defined by default for PyTorch bindings - to use cpp harness, comment this out
+// #define TORCH_COMPILE // defined by default for PyTorch bindings - to use cpp harness, comment this out
 
 #include "src/kittens.cuh"
 
@@ -35,10 +35,12 @@ __device__ inline void cumulative_add(ST &dst, const ST &inc) {
 #define ATTN_D 128
 #define ATTN_F 256
 
-#define tile_q_smem   st_bf<4, 4, wgmma_interleave_l>   
+#define tile_q_smem   st_bf<4, 4, wgmma_swizzle_l>   
 #define tile_k_smem   st_bf<4, 4, wgmma_interleave_l>  
-#define tile_vo_smem  st_bf<4, 8, wgmma_interleave_l>    
+#define tile_vo_smem  st_bf<4, 8, wgmma_interleave_l>   
+#define tile_o_smem   st_bf<4, 8, wgmma_swizzle_l> 
 #define tile_kv_smem  st_bf<4, 8, wgmma_interleave_l>
+#define tile_kv2_smem st_bf<4, 8, wgmma_swizzle_l>
 
 __global__ __launch_bounds__(NUM_THREADS, 1)
 void hedgehog_linear_attention(int n, const CUtensorMap* tma_q, const CUtensorMap* tma_k, const CUtensorMap* tma_v, 
@@ -47,11 +49,12 @@ void hedgehog_linear_attention(int n, const CUtensorMap* tma_q, const CUtensorMa
     extern __shared__ int __shm[]; // this is the CUDA shared memory
     tma_swizzle_allocator al((int*)&__shm[0]);
 
-    tile_q_smem  (&q_smem)   [4] = al.allocate<tile_q_smem,  4>(); // 32k
-    tile_k_smem  (&k_smem)   [4] = al.allocate<tile_k_smem,  4>(); // 32k 
-    tile_k_smem  (&k_c_smem) [4] = al.allocate<tile_k_smem,  4>(); // 32k
-    tile_vo_smem (&v_smem)   [1] = al.allocate<tile_vo_smem, 1>(); // 16k
-    tile_kv_smem (&kv_smem)      = al.allocate<tile_kv_smem   >();
+    tile_q_smem  (&q_smem)   [2][4] = al.allocate<tile_q_smem,  2, 4>(); // 32k
+    tile_k_smem  (&k_smem)   [2][4] = al.allocate<tile_k_smem,  2, 4>(); // 32k 
+    tile_vo_smem (&v_smem)   [2][1] = al.allocate<tile_vo_smem, 2, 1>(); // 16k
+    tile_kv_smem (&kv_smem)         = al.allocate<tile_kv_smem   >();
+
+    tile_k_smem  (&k_c_smem) [4]    = al.allocate<tile_k_smem,  4>(); // 32k
 
     int warpid      = kittens::warpid(); 
     int warpgroupid = warpid/kittens::WARPGROUP_WARPS;
@@ -60,6 +63,22 @@ void hedgehog_linear_attention(int n, const CUtensorMap* tma_q, const CUtensorMa
     __shared__ uint64_t qkv_barrier; 
 
     int blocks = n / (kittens::TILE_DIM * 4); 
+
+    if (warpid == 0) {
+        tma::init_barrier(qkv_barrier, 1);
+        tma::set_bytes(qkv_barrier, 
+            size_bytes<tile_q_smem>*4 + 
+            size_bytes<tile_k_smem>*4 + 
+            size_bytes<tile_vo_smem>
+        );
+
+        int tile_idx = (blockIdx.x * blocks) + 0; 
+        for (int i = 0; i < 4; i++) {
+            tma::load_async(q_smem[tic][i], tma_q, qkv_barrier, tile_idx, i); 
+            tma::load_async(k_smem[tic][i], tma_k, qkv_barrier, tile_idx, i); 
+        }
+        tma::load_async(v_smem[tic][0], tma_v, qkv_barrier, tile_idx);
+    }
 
     rt_fl<1, 8> local_kv[4];
     #pragma unroll
@@ -82,26 +101,28 @@ void hedgehog_linear_attention(int n, const CUtensorMap* tma_q, const CUtensorMa
         rt_fl<1, 8>          local_o; 
         rt_bf<1, 8>          kv_bf[4];
 
-        if (warpid == 0) {
-            if (block == 0) {
-            tma::init_barrier(qkv_barrier, 1); } 
-            tma::set_bytes(qkv_barrier, size_bytes<tile_q_smem>*4 + size_bytes<tile_k_smem>*4 + size_bytes<tile_vo_smem>); 
-
-            int tile_idx = (blockIdx.x * blocks) + block; 
-            for (int i = 0; i < 4; i++) {
-                tma::load_async(q_smem[i], tma_q, qkv_barrier, tile_idx, i); 
-                tma::load_async(k_smem[i], tma_k, qkv_barrier, tile_idx, i); 
-            }
-            tma::load_async(v_smem[0], tma_v, qkv_barrier, tile_idx);
-        }
-
         tma::arrive_and_wait(qkv_barrier, tic); 
         __syncthreads();
+
+        if (warpid == 0 && block + 1 < blocks) {
+            tma::set_bytes(qkv_barrier, 
+                size_bytes<tile_q_smem>*4 + 
+                size_bytes<tile_k_smem>*4 + 
+                size_bytes<tile_vo_smem>
+            ); 
+
+            int tile_idx = (blockIdx.x * blocks) + block + 1;
+            for (int i = 0; i < 4; i++) {
+                tma::load_async(q_smem[toc][i], tma_q, qkv_barrier, tile_idx, i); 
+                tma::load_async(k_smem[toc][i], tma_k, qkv_barrier, tile_idx, i); 
+            }
+            tma::load_async(v_smem[toc][0], tma_v, qkv_barrier, tile_idx);
+        }
 
         zero(local_attn); 
         for (int j = 0; j < 4; j++) {
             warpgroup::mma_fence(local_attn); 
-            warpgroup::mma_ABt(local_attn, q_smem[j], k_smem[j]); 
+            warpgroup::mma_ABt(local_attn, q_smem[tic][j], k_smem[tic][j]); 
             warpgroup::mma_commit_group(); 
             warpgroup::mma_async_wait();
         }
@@ -116,7 +137,7 @@ void hedgehog_linear_attention(int n, const CUtensorMap* tma_q, const CUtensorMa
 
         copy(local_attn_bf, local_attn); 
         warpgroup::mma_fence(local_o); 
-        warpgroup::mm_AB(local_o, local_attn_bf, v_smem[0]); 
+        warpgroup::mm_AB(local_o, local_attn_bf, v_smem[tic][0]); 
         warpgroup::mma_commit_group(); 
         warpgroup::mma_async_wait();
 
@@ -126,56 +147,56 @@ void hedgehog_linear_attention(int n, const CUtensorMap* tma_q, const CUtensorMa
             __syncthreads();
 
             warpgroup::mma_fence(local_o); 
-            warpgroup::mma_AB(local_o, q_smem[rt], kv_smem); 
+            warpgroup::mma_AB(local_o, q_smem[tic][rt], kv_smem); 
             warpgroup::mma_commit_group();
 
             warpgroup::mma_fence(local_kv[rt]); 
-            warpgroup::mma_AtB(local_kv[rt], k_smem[rt], v_smem[0]); 
+            warpgroup::mma_AtB(local_kv[rt], k_smem[tic][rt], v_smem[tic][0]); 
             warpgroup::mma_commit_group(); 
             warpgroup::mma_async_wait();
         }
 
         __syncthreads();
-        cumulative_add(k_c_smem[warpid], k_smem[warpid]);
+        cumulative_add(k_c_smem[warpid], k_smem[tic][warpid]);
         __syncthreads();
 
         zero(den_vec); 
         for (auto rt = 0; rt < 4; rt++) {
-            warpgroup::load(q_reg, q_smem[rt]);
-            warpgroup::load(k_c_reg, k_c_smem[rt]);
+            auto &k_c_2_smem = reinterpret_cast<st_bf<4, 4, wgmma_swizzle_l>&>(k_c_smem[rt]);
+
+            warpgroup::load(q_reg, q_smem[tic][rt]);
+            warpgroup::load(k_c_reg, k_c_2_smem);
 
             mul(q_reg, q_reg, k_c_reg);
             row_sum(den_vec, q_reg, den_vec);
-            __syncthreads(); 
         }
         
         div_row(local_o, local_o, den_vec);
 
-        warpgroup::store(v_smem[0], local_o); 
+        auto &o_smem = reinterpret_cast<tile_o_smem&>(v_smem[tic][0]);
+        warpgroup::store(o_smem, local_o); 
         __syncthreads(); 
 
         if (warpid == 0) {
             int sidx = (blockIdx.x * blocks) + block; 
-            tma::store_async(tma_o, v_smem[0], sidx); 
+            tma::store_async(tma_o, o_smem, sidx); 
             tma::store_commit_group(); 
         }
         tma::store_async_wait(); 
-        __syncthreads();
     }
 
     for (int rt = 0; rt < 4; rt++) {
-        warpgroup::store(kv_smem, local_kv[rt]); 
+        auto &kv_smem_2 = reinterpret_cast<tile_kv2_smem&>(kv_smem);
+        warpgroup::store(kv_smem_2, local_kv[rt]); 
         __syncthreads();
 
         if (warpid == 0) {
             int tile_idx = (blockIdx.x * 4) + rt; 
-            tma::store_async(tma_kv, kv_smem, tile_idx); 
+            tma::store_async(tma_kv, kv_smem_2, tile_idx); 
             tma::store_commit_group(); 
         }
-        __syncthreads(); 
-    } 
-
-    tma::store_async_wait(); 
+        tma::store_async_wait();
+    }
 }
 
 #ifdef TORCH_COMPILE
@@ -209,11 +230,11 @@ void hh_lin_tk(torch::Tensor q, torch::Tensor k, torch::Tensor v, torch::Tensor 
     const bf16* d_kv_state = reinterpret_cast<bf16*>      (kv_ptr);  
     const bf16* d_o        = reinterpret_cast<bf16*>      (o_ptr);  
 
-    CUtensorMap* tma_q_d  = tma::allocate_and_create_tensor_map<tile_q_smem> (d_q,        (batch*heads*N/(16 * 4)),     f/(16 * 4)); 
-    CUtensorMap* tma_k_d  = tma::allocate_and_create_tensor_map<tile_k_smem> (d_k,        (batch*heads*N/(16 * 4)),     f/(16 * 4));
-    CUtensorMap* tma_v_d  = tma::allocate_and_create_tensor_map<tile_vo_smem>(d_v,        (batch*heads*N/(16 * 4)),     d/(16 * 8));
-    CUtensorMap* tma_o_d  = tma::allocate_and_create_tensor_map<tile_vo_smem>(d_o,        (batch*heads*N/(16 * 4)),     d/(16 * 8));
-    CUtensorMap* tma_kv_d = tma::allocate_and_create_tensor_map<tile_kv_smem>(d_kv_state, (batch*heads*(d*2)/(16 * 4)), d/(16 * 8));
+    CUtensorMap* tma_q_d  = tma::allocate_and_create_tensor_map<tile_q_smem>  (d_q,        (batch*heads*N/(16 * 4)),       ATTN_F/(16 * 4) ); 
+    CUtensorMap* tma_k_d  = tma::allocate_and_create_tensor_map<tile_k_smem>  (d_k,        (batch*heads*N/(16 * 4)),       ATTN_F/(16 * 4) );
+    CUtensorMap* tma_v_d  = tma::allocate_and_create_tensor_map<tile_vo_smem> (d_v,        (batch*heads*N/(16 * 4)),       ATTN_D/(16 * 8) );
+    CUtensorMap* tma_o_d  = tma::allocate_and_create_tensor_map<tile_o_smem > (d_o,        (batch*heads*N/(16 * 4)),       ATTN_D/(16 * 8) );
+    CUtensorMap* tma_kv_d = tma::allocate_and_create_tensor_map<tile_kv2_smem>(d_kv_state, (batch*heads*(ATTN_F/(16 * 4)), ATTN_D/(16 * 8))); 
 
     unsigned long mem_size = kittens::MAX_SHARED_MEMORY;
 

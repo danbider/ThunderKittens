@@ -201,11 +201,11 @@ class LlamaHHLinearAttentionTK(LlamaAttention):
         attn_time = start_event.elapsed_time(end_event)
         
         # Normalize
-        start_event.record()
-        attn_output = attn_output / (torch.einsum("bhld,bhld->bhl", q, k.float().cumsum(dim=2).bfloat16()))[..., None]
-        end_event.record()
-        torch.cuda.synchronize()
-        norm_time = start_event.elapsed_time(end_event)
+        # start_event.record()
+        # attn_output = attn_output / (torch.einsum("bhld,bhld->bhl", q, k.float().cumsum(dim=2).bfloat16()))[..., None]
+        # end_event.record()
+        # torch.cuda.synchronize()
+        norm_time = 0
 
         # Reshape output
         start_event.record()
@@ -511,7 +511,7 @@ for N in sequence_lengths:
     tk_times.append(tk_time)
 
 plt.figure(figsize=(10, 6))
-plt.plot(sequence_lengths, quad_times, label='Quadratic Attention', marker='o')
+plt.plot(sequence_lengths, quad_times, label='FA2 PyTorch', marker='o')
 plt.plot(sequence_lengths, tk_times, label='Custom Kernel', marker='x')
 plt.xlabel('Sequence Length')
 plt.ylabel('Total Time (ms)')

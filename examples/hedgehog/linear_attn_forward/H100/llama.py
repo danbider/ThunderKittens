@@ -34,14 +34,14 @@ D = 128
 # accept arg for N 
 N = int(sys.argv[1])
 
-torch.random.manual_seed(42)
+torch.random.manual_seed(46)
 q = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda'))
 k = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda'))
 v = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda'))
 
-q = q/(float(D))
-k = k/(float(D))
-v = v/(float(D))
+q = q/(float(D)**.5)
+k = k/(float(D)**.5)
+v = v/(float(D)**.5)
 
 kv_state = (torch.zeros((B, H, D*2, D), dtype=torch.bfloat16, device='cuda'))
 o = torch.zeros((B, H, N, D), dtype=torch.bfloat16, device='cuda')
@@ -49,16 +49,6 @@ o = torch.zeros((B, H, N, D), dtype=torch.bfloat16, device='cuda')
 def linear_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, kv_state: torch.Tensor, o: torch.Tensor) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
     
     causal = True
-    
-    q_max = torch.amax(q, dim=-1, keepdim=True)
-    q = torch.cat([
-        torch.exp(q - q_max), torch.exp(-q + q_max)
-    ], dim=-1)
-        
-    k_max = torch.amax(k, dim=-1, keepdim=True)
-    k = torch.cat([
-        torch.exp(k - k_max), torch.exp(-k + k_max)
-    ], dim=-1)
         
     tk_kernel.hh_lin_tk(q, k, v, o, kv_state)
         
@@ -68,13 +58,15 @@ def quadratic_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
                         causal: bool = True) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
     
     q_max = torch.amax(q, dim=-1, keepdim=True)
+    q_min = torch.amin(q, dim=-1, keepdim=True)
     q = torch.cat([
-        torch.exp(q - q_max), torch.exp(-q + q_max)
+        torch.exp(q - q_max), torch.exp(-q + q_min)
     ], dim=-1)
-    
+
     k_max = torch.amax(k, dim=-1, keepdim=True)
+    k_min = torch.amin(k, dim=-1, keepdim=True)
     k = torch.cat([
-        torch.exp(k - k_max), torch.exp(-k + k_max)
+        torch.exp(k - k_max), torch.exp(-k + k_min)
     ], dim=-1)
     
     y = None
@@ -96,9 +88,6 @@ def quadratic_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
 linear_out, linear_kv_state, _    = linear_attention(q, k, v, kv_state, o)
 quadratic_out, quadratic_kv_state, _ = quadratic_attention(q, k, v)
 
-print(linear_kv_state.shape)
-print(quadratic_kv_state.shape)
-
 # print out 1/100 of avg mag of o and kv_state
 print(f"1/100 of Avg mag of quadratic out: {torch.mean(torch.abs(quadratic_out)).item()/100}")
 
@@ -107,7 +96,7 @@ print(f"Max diff out: {torch.max(torch.abs(linear_out - quadratic_out)).item()}"
 # print avg diff
 print(f"Avg diff out: {torch.mean(torch.abs(linear_out - quadratic_out)).item()}")
 
-# print out the first 10 elements
-print(f"Linear out: {linear_out[0, 0, -10:, :4]}")
-print(f"Quadratic out: {quadratic_out[0, 0, -10:, :4]}")
+# print out the last 10 elements
+print(f"Linear out: {linear_out[0, 0, -10:, -5:]}")
+print(f"Quadratic out: {quadratic_out[0, 0, -10:, -5:]}")
 

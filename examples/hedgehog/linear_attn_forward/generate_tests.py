@@ -18,19 +18,23 @@ q = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda'))
 k = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda'))
 v = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda'))
 
-q = q/(float(D))
-k = k/(float(D))
-v = v/(float(D))
-
-q = torch.cat([
-    torch.softmax(q, dim=-1), torch.softmax(-q, dim=-1)
-], dim=-1).clamp(min=1e-6)
-
-k = torch.cat([
-    torch.softmax(k, dim=-1), torch.softmax(-k, dim=-1)
-], dim=-1).clamp(min=1e-6)
+q = q/(float(D)**.5)
+k = k/(float(D)**.5)
+v = v/(float(D)**.5)
 
 def pytorch_test(Q, K, V): 
+    
+    q_max = torch.amax(Q, dim=-1, keepdim=True)
+    q_min = torch.amin(Q, dim=-1, keepdim=True)
+    Q = torch.cat([
+        torch.exp(Q - q_max), torch.exp(-Q + q_min)
+    ], dim=-1)
+
+    k_max = torch.amax(K, dim=-1, keepdim=True)
+    k_min = torch.amin(K, dim=-1, keepdim=True)
+    K = torch.cat([
+        torch.exp(K - k_max), torch.exp(-K + k_min)
+    ], dim=-1)
     
     causal = True
     
@@ -82,10 +86,10 @@ with open(f'randn.txt', 'w') as f:
     vf = v.to(torch.float32).flatten().cpu().numpy()
     of = o.to(torch.float32).flatten().cpu().numpy()
     kv = kv_state.to(torch.float32).flatten().cpu().numpy()
-    for i in trange(B*H*N*D*2):
+    for i in trange(B*H*N*D):
         f.write(repr(qf[i]))
         f.write(' ')
-    for i in trange(B*H*N*D*2):
+    for i in trange(B*H*N*D):
         f.write(repr(kf[i]))
         f.write(' ')
     for i in trange(B*H*N*D):

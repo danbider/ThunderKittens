@@ -108,17 +108,22 @@ class LlamaHHLinearAttentionTK(LlamaAttention):
         self._init_rope()
         
     def feature_qk(self, query_states, key_states):
-        q_max = torch.amax(query_states, dim=-1, keepdim=True)
-        q = torch.cat([
-            torch.exp(query_states - q_max), torch.exp(-query_states + q_max)
+        Q = query_states
+        K = key_states
+        
+        q_max = torch.amax(Q, dim=-1, keepdim=True)
+        q_min = torch.amin(Q, dim=-1, keepdim=True)
+        Q = torch.cat([
+            torch.exp(Q - q_max), torch.exp(-Q + q_min)
+        ], dim=-1)
+
+        k_max = torch.amax(K, dim=-1, keepdim=True)
+        k_min = torch.amin(K, dim=-1, keepdim=True)
+        K = torch.cat([
+            torch.exp(K - k_max), torch.exp(-K + k_min)
         ], dim=-1)
         
-        k_max = torch.amax(key_states, dim=-1, keepdim=True)
-        k = torch.cat([
-            torch.exp(key_states - k_max), torch.exp(-key_states + k_max)
-        ], dim=-1)
-        
-        return q, k
+        return Q, K
         
     def forward(
         self,
@@ -185,17 +190,20 @@ class LlamaHHLinearAttentionTK(LlamaAttention):
         repeat_time = start_event.elapsed_time(end_event)
         
         # Feature map
-        start_event.record()
-        q, k = self.feature_qk(query_states, key_states)
-        end_event.record()
-        torch.cuda.synchronize()
-        feature_time = start_event.elapsed_time(end_event)
+        # start_event.record()
+        # q, k = self.feature_qk(query_states, key_states)
+        # end_event.record()
+        # torch.cuda.synchronize()
+        feature_time = 0
 
         # Attention computation
         attn_output = torch.zeros_like(value_states).contiguous()
         kv_state = torch.zeros((bsz, self.num_heads, self.head_dim*2, self.head_dim), dtype=attn_output.dtype, device=attn_output.device).contiguous()
         start_event.record()
-        tk_kernel.hh_lin_tk(q.contiguous(), k.contiguous(), value_states.contiguous(), attn_output, kv_state)
+        tk_kernel.hh_lin_tk(query_states.contiguous(), 
+                            key_states.contiguous(), 
+                            value_states.contiguous(), 
+                            attn_output, kv_state)
         end_event.record()
         torch.cuda.synchronize()
         attn_time = start_event.elapsed_time(end_event)
@@ -290,10 +298,11 @@ class LlamaHHLinearAttentionTK(LlamaAttention):
             m, n = a.shape[-2:]
             causal_mask = torch.ones((m, n), device=a.device, dtype=torch.bool).triu(n - m + 1)
             a = a.masked_fill(causal_mask, 0)
-        attn_output = torch.einsum('bhmn,bhnd->bhmd', a, value_states)
-
+        
         # Normalize
-        attn_output = attn_output / (torch.einsum("bhld,bhld->bhl", q, k.float().cumsum(dim=2).bfloat16()))[..., None]
+        a = a / (a.sum(dim=-1, keepdim=True))
+        
+        attn_output = torch.einsum('bhmn,bhnd->bhmd', a, value_states)
 
         # Reshape output
         attn_output = attn_output.transpose(1, 2).contiguous()
@@ -456,10 +465,13 @@ tk_out, _, _ = llamaAttention(hidden_states=hidden_states, position_ids=position
 # print max diff
 print(f"Max diff: {torch.max(torch.abs(quad_out - tk_out))}")
 
+# print avg diff
+print(f"Avg diff: {torch.mean(torch.abs(quad_out - tk_out))}")
+
 # print out values
-# print(f"Quad Out: {quad_out[0, 50:70, :4]}")
-# print(f"TK Out: {tk_out[0, 50:70, :4]}")
-# print("-" * 80)
+print(f"Quad Out: {quad_out[0, 50:70, :4]}")
+print(f"TK Out: {tk_out[0, 50:70, :4]}")
+print("-" * 80)
 
 def profile_attention(B, N):
     hidden_states = torch.randn((B, N, 4096), dtype=torch.bfloat16, device='cuda:0')

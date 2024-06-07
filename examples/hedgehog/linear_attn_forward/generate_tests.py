@@ -3,6 +3,8 @@ from tqdm import trange
 import numpy as np
 import sys
 
+import torch.nn.functional as F
+
 # only generate a single batch/head of data, which makes file loading much faster.
 # it does mean we'll have to check batch/head behavior separately later, but that should be much easier to debug.
 B = 1
@@ -13,14 +15,40 @@ D = 128
 # accept arg for N 
 N = int(sys.argv[1])
 
-torch.random.manual_seed(46)
+torch.random.manual_seed(32)
 q = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda'))
 k = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda'))
 v = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda'))
 
-q = q/(float(D)**.5)
-k = k/(float(D)**.5)
-v = v/(float(D)**.5)
+# q = q/(float(D*2)**.5)
+# k = k/(float(D*2)**.5)
+# v = v/(float(D)**.5)
+
+def pytorch_softmax_gt(x):
+    
+    x_pos = x
+    x_neg = -x
+    
+    x_pos_max = torch.amax(x_pos, dim=-1, keepdim=True)
+    x_neg_max = torch.amax(x_neg, dim=-1, keepdim=True)
+    
+    # softmax(x) = torch.exp(x - x_max) / torch.sum(torch.exp(x - x_max), dim=-1) 
+    
+    x_pos = x_pos - x_pos_max
+    x_neg = x_neg + x_neg_max
+    
+    x_pos_num = torch.exp(x_pos)
+    x_pos_den = torch.sum(torch.exp(x_pos), dim=-1, keepdim=True)
+    
+    x_neg_num = torch.exp(x_neg)
+    x_neg_den = torch.sum(torch.exp(x_neg), dim=-1, keepdim=True)
+    
+    x_pos = x_pos_num / x_pos_den
+    x_neg = x_neg_num / x_neg_den
+    
+    x = torch.cat([x_pos, x_neg], dim=-1).clamp(min=1e-6)
+    
+    return x
 
 def pytorch_test(Q, K, V): 
     
@@ -35,6 +63,9 @@ def pytorch_test(Q, K, V):
     K = torch.cat([
         torch.exp(K - k_max), torch.exp(-K + k_min)
     ], dim=-1)
+    
+    # Q = pytorch_softmax_gt(Q)
+    # K = pytorch_softmax_gt(K)
     
     causal = True
     
@@ -55,6 +86,13 @@ def pytorch_test(Q, K, V):
     last_kv_state = kv_state[:, :, -1].transpose(2, 3)
     
     return out, last_kv_state
+
+# add padding to Q, K, V, and O to make multiple of 64
+N = (N + 63) // 64 * 64
+
+q = F.pad(q, (0, 0, 0, N - q.size(2)), value=0)
+k = F.pad(k, (0, 0, 0, N - k.size(2)), value=0)
+v = F.pad(v, (0, 0, 0, N - v.size(2)), value=0)
 
 o, kv_state = pytorch_test(q, k, v)
 

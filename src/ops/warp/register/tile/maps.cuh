@@ -116,14 +116,17 @@ __device__ static inline void row_map(T &dst, const T &src, const V &row_values)
 
     #pragma unroll
     for(int i = 0; i < dst.height; i++) {
+        
         dtype packed_top_row    = base_types::packing<dtype>::pack(row_values[i][0].x); //  first value in eager mode
         dtype packed_bottom_row = base_types::packing<dtype>::pack(row_values[i][0].y); // second value in eager mode
         #pragma unroll
         for(int j = 0; j < dst.width; j++) {
             #pragma unroll
             for(int k = 0; k < dst.packed_per_tile; k+=2) {
+                
                 dst.tiles[i][j].data[k+0] = op::template op<dtype>(src.tiles[i][j].data[k+0], packed_top_row);
                 dst.tiles[i][j].data[k+1] = op::template op<dtype>(src.tiles[i][j].data[k+1], packed_bottom_row);
+                
             }
         }
     }

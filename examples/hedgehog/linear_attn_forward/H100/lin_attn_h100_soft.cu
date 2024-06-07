@@ -35,13 +35,6 @@ __device__ inline void cumulative_add(ST &dst, const ST &inc) {
 #define ATTN_D 128
 #define ATTN_F 256
 
-#define tile_q_smem   st_bf<4, 4, wgmma_swizzle_l>   
-#define tile_k_smem   st_bf<4, 4, wgmma_interleave_l>  
-#define tile_vo_smem  st_bf<4, 8, wgmma_interleave_l>   
-#define tile_o_smem   st_bf<4, 8, wgmma_swizzle_l> 
-#define tile_kv_smem  st_bf<4, 8, wgmma_interleave_l>
-#define tile_kv2_smem st_bf<4, 8, wgmma_swizzle_l>
-
 __global__ __launch_bounds__(NUM_THREADS, 1)
 void hedgehog_linear_attention(int n, const CUtensorMap* tma_q, const CUtensorMap* tma_k, const CUtensorMap* tma_v, 
                                             CUtensorMap* tma_o,       CUtensorMap* tma_kv)
@@ -49,11 +42,11 @@ void hedgehog_linear_attention(int n, const CUtensorMap* tma_q, const CUtensorMa
     extern __shared__ int __shm[]; // this is the CUDA shared memory
     tma_swizzle_allocator al((int*)&__shm[0]);
 
-    tile_q_smem  (&q_smem)   [2][4] = al.allocate<tile_q_smem,  2, 4>(); // 32k
-    tile_k_smem  (&k_smem)   [2][4] = al.allocate<tile_k_smem,  2, 4>(); // 32k 
-    tile_vo_smem (&v_smem)   [2][1] = al.allocate<tile_vo_smem, 2, 1>(); // 16k
-    tile_kv_smem (&kv_smem)         = al.allocate<tile_kv_smem   >();
-    tile_k_smem  (&k_c_smem) [4]    = al.allocate<tile_k_smem,  4>(); // 32k
+    st_bf<4, 4, kittens::ducks::st_layout::wgmma_swizzle>    (&q_smem)   [2][4] = al.allocate<st_bf<4, 4, kittens::ducks::st_layout::wgmma_swizzle>,    2, 4>(); // 32k
+    st_bf<4, 4, kittens::ducks::st_layout::wgmma_interleave> (&k_smem)   [2][4] = al.allocate<st_bf<4, 4, kittens::ducks::st_layout::wgmma_interleave>, 2, 4>(); // 32k 
+    st_bf<4, 8, kittens::ducks::st_layout::wgmma_interleave> (&v_smem)   [2][1] = al.allocate<st_bf<4, 8, kittens::ducks::st_layout::wgmma_interleave>, 2, 1>(); // 16k
+    st_bf<4, 8, kittens::ducks::st_layout::wgmma_interleave> (&kv_smem)         = al.allocate<st_bf<4, 8, kittens::ducks::st_layout::wgmma_interleave>      >();
+    st_bf<4, 4, kittens::ducks::st_layout::wgmma_interleave> (&k_c_smem) [4]    = al.allocate<st_bf<4, 4, kittens::ducks::st_layout::wgmma_interleave>, 4   >(); // 32k
 
     int warpid      = kittens::warpid();
 
@@ -65,9 +58,9 @@ void hedgehog_linear_attention(int n, const CUtensorMap* tma_q, const CUtensorMa
     if (warpid == 0) {
         tma::init_barrier(qkv_barrier, 1);
         tma::set_bytes(qkv_barrier, 
-            size_bytes<tile_q_smem>*2 + 
-            size_bytes<tile_k_smem>*2 + 
-            size_bytes<tile_vo_smem>
+            size_bytes<st_bf<4, 4, kittens::ducks::st_layout::wgmma_swizzle>>*2 + 
+            size_bytes<st_bf<4, 4, kittens::ducks::st_layout::wgmma_interleave>>*2 + 
+            size_bytes<st_bf<4, 8, kittens::ducks::st_layout::wgmma_interleave>>
         );
 
         int tile_idx = (blockIdx.x * blocks) + 0; 
@@ -80,14 +73,8 @@ void hedgehog_linear_attention(int n, const CUtensorMap* tma_q, const CUtensorMa
 
     rt_fl<1, 8> local_kv[4];
 
-    #pragma unroll
-    for (int rt = 0; rt < 4; rt++) {
-        zero(local_kv[rt]); 
-    }
-
-    warpgroup::zero(k_c_smem[warpid]);
-
-    col_vec<rt_fl<1, 4>> den_vec;
+    for (int rt = 0; rt < 4; rt++) { zero(local_kv[rt]); } 
+    for (int rt = 0; rt < 4; rt++) { warpgroup::zero(k_c_smem[rt]); }
 
     for (int block = 0; block < blocks; block++, tic^=1, toc^=1) {
         rt_fl<1, 4>          local_attn; 
@@ -98,29 +85,32 @@ void hedgehog_linear_attention(int n, const CUtensorMap* tma_q, const CUtensorMa
         rt_fl<1, 4>          q_reg; 
         rt_fl<1, 4>          k_c_reg;
 
-        rt_fl<1, 4>          q_fm_reg; 
-        rt_fl<1, 4>          k_fm_reg; 
+        rt_fl<1, 4>          q_fm_reg[2]; 
+        rt_fl<1, 4>          k_fm_reg[2];
 
         col_vec<rt_fl<1, 4>> max_fm_vec; 
         col_vec<rt_fl<1, 4>> min_fm_vec;
+        col_vec<rt_fl<1, 4>> sum_fm_vec;
 
         rt_fl<1, 8>          local_o; 
+        col_vec<rt_fl<1, 4>> den_vec;
 
         neg_infty(max_fm_vec); 
         pos_infty(min_fm_vec);
+        zero(den_vec);
 
         tma::arrive_and_wait(qkv_barrier, tic); 
         __syncthreads();
 
-        if (warpid == 0 && block + 1 < blocks) {
+        if (warpid == 0 && block < blocks - 1) {
             tma::set_bytes(qkv_barrier, 
-                size_bytes<tile_q_smem>*2 + 
-                size_bytes<tile_k_smem>*2 + 
-                size_bytes<tile_vo_smem>
-            ); 
+                size_bytes<st_bf<4, 4, kittens::ducks::st_layout::wgmma_swizzle>>*2 + 
+                size_bytes<st_bf<4, 4, kittens::ducks::st_layout::wgmma_interleave>>*2 + 
+                size_bytes<st_bf<4, 8, kittens::ducks::st_layout::wgmma_interleave>>
+            );
 
             int tile_idx = (blockIdx.x * blocks) + block + 1;
-            #pragma unroll
+
             for (int i = 0; i < 2; i++) {
                 tma::load_async(q_smem[toc][i], tma_q, qkv_barrier, tile_idx, i); 
                 tma::load_async(k_smem[toc][i], tma_k, qkv_barrier, tile_idx, i); 
@@ -129,69 +119,104 @@ void hedgehog_linear_attention(int n, const CUtensorMap* tma_q, const CUtensorMa
         }
 
         // ******* apply feature map ******** // 
+        
         // do q first
+        warpgroup::mul(q_smem[tic][2], q_smem[tic][0], __float2bfloat16(-1.0f));
+        warpgroup::mul(q_smem[tic][3], q_smem[tic][1], __float2bfloat16(-1.0f));
+        __syncthreads();
+        
         #pragma unroll
         for (int rt = 0; rt < 2; rt++) {
-            warpgroup::load(q_fm_reg, q_smem[tic][rt]);
-            row_max(max_fm_vec, q_fm_reg, max_fm_vec);
-            row_min(min_fm_vec, q_fm_reg, min_fm_vec);
-
-            warpgroup::mul(q_smem[tic][rt + 2], q_smem[tic][rt], __float2bfloat16(-1.0f));
+            warpgroup::load(q_fm_reg[rt], q_smem[tic][rt]);
+            row_max(max_fm_vec, q_fm_reg[rt], max_fm_vec);
+            row_min(min_fm_vec, q_fm_reg[rt], min_fm_vec);
         }
+        __syncthreads();
 
-        // alr have rt = 1 in q_fm_reg
-        sub_row(q_fm_reg, q_fm_reg, max_fm_vec);
-        exp(q_fm_reg, q_fm_reg);
-        warpgroup::store(q_smem[tic][1], q_fm_reg);
+        zero(sum_fm_vec);
+        #pragma unroll
+        for (int rt = 0; rt < 2; rt++) {
+            sub_row(q_fm_reg[rt], q_fm_reg[rt], max_fm_vec);
+            exp(q_fm_reg[rt], q_fm_reg[rt]);
+            row_sum(sum_fm_vec, q_fm_reg[rt], sum_fm_vec);
+        }
+        __syncthreads();
 
-        // now do 0
-        warpgroup::load(q_fm_reg, q_smem[tic][0]);
-        sub_row(q_fm_reg, q_fm_reg, max_fm_vec);
-        exp(q_fm_reg, q_fm_reg);
-        warpgroup::store(q_smem[tic][0], q_fm_reg);
+        #pragma unroll
+        for (int rt = 0; rt < 2; rt++) {
+            div_row(q_fm_reg[rt], q_fm_reg[rt], sum_fm_vec);
+            warpgroup::store(q_smem[tic][rt], q_fm_reg[rt]);
+        }
+        __syncthreads();
+
+        zero(sum_fm_vec);
+        #pragma unroll
+        for (int rt = 2; rt < 4; rt++) {
+            warpgroup::load(q_fm_reg[rt - 2], q_smem[tic][rt]);
+            add_row(q_fm_reg[rt - 2], q_fm_reg[rt - 2], min_fm_vec);
+            exp(q_fm_reg[rt - 2], q_fm_reg[rt - 2]);
+            row_sum(sum_fm_vec, q_fm_reg[rt - 2], sum_fm_vec);
+        }
+        __syncthreads();
 
         #pragma unroll
         for (int rt = 2; rt < 4; rt++) {
-            warpgroup::load(q_fm_reg, q_smem[tic][rt]);
-            add_row(q_fm_reg, q_fm_reg, min_fm_vec);
-            exp(q_fm_reg, q_fm_reg);
-            warpgroup::store(q_smem[tic][rt], q_fm_reg);
+            div_row(q_fm_reg[rt - 2], q_fm_reg[rt - 2], sum_fm_vec);
+            warpgroup::store(q_smem[tic][rt], q_fm_reg[rt - 2]);
         }
-        
-        neg_infty(max_fm_vec);
-        pos_infty(min_fm_vec);
+        __syncthreads();
 
         // now do exactly the same for k
+        neg_infty(max_fm_vec);
+        pos_infty(min_fm_vec);
+        __syncthreads();
+
+        // do q first
+        warpgroup::mul(k_smem[tic][2], k_smem[tic][0], __float2bfloat16(-1.0f));
+        warpgroup::mul(k_smem[tic][3], k_smem[tic][1], __float2bfloat16(-1.0f));
+        __syncthreads();
+
         #pragma unroll
         for (int rt = 0; rt < 2; rt++) {
-            warpgroup::load(k_fm_reg, k_smem[tic][rt]);
-            row_max(max_fm_vec, k_fm_reg, max_fm_vec);
-            row_min(min_fm_vec, k_fm_reg, min_fm_vec);
-
-            warpgroup::mul(k_smem[tic][rt + 2], k_smem[tic][rt], __float2bfloat16(-1.0f));
+            warpgroup::load(k_fm_reg[rt], k_smem[tic][rt]);
+            row_max(max_fm_vec, k_fm_reg[rt], max_fm_vec);
+            row_min(min_fm_vec, k_fm_reg[rt], min_fm_vec);
         }
+        __syncthreads();
 
-        // alr have rt = 1 in k_fm_reg
-        sub_row(k_fm_reg, k_fm_reg, max_fm_vec);
-        exp(k_fm_reg, k_fm_reg);
-        warpgroup::store(k_smem[tic][1], k_fm_reg);
+        zero(sum_fm_vec);
+        #pragma unroll
+        for (int rt = 0; rt < 2; rt++) {
+            sub_row(k_fm_reg[rt], k_fm_reg[rt], max_fm_vec);
+            exp(k_fm_reg[rt], k_fm_reg[rt]);
+            row_sum(sum_fm_vec, k_fm_reg[rt], sum_fm_vec);
+        }
+        __syncthreads();
 
-        // now do 0
-        warpgroup::load(k_fm_reg, k_smem[tic][0]);
-        sub_row(k_fm_reg, k_fm_reg, max_fm_vec);
-        exp(k_fm_reg, k_fm_reg);
-        warpgroup::store(k_smem[tic][0], k_fm_reg);
+        #pragma unroll
+        for (int rt = 0; rt < 2; rt++) {
+            div_row(k_fm_reg[rt], k_fm_reg[rt], sum_fm_vec);
+            warpgroup::store(k_smem[tic][rt], k_fm_reg[rt]);
+        }
+        __syncthreads();
+
+        zero(sum_fm_vec);
+        #pragma unroll
+        for (int rt = 2; rt < 4; rt++) {
+            warpgroup::load(k_fm_reg[rt - 2], k_smem[tic][rt]);
+            add_row(k_fm_reg[rt - 2], k_fm_reg[rt - 2], min_fm_vec);
+            exp(k_fm_reg[rt - 2], k_fm_reg[rt - 2]);
+            row_sum(sum_fm_vec, k_fm_reg[rt - 2], sum_fm_vec);
+        }
+        __syncthreads();
 
         #pragma unroll
         for (int rt = 2; rt < 4; rt++) {
-            warpgroup::load(k_fm_reg, k_smem[tic][rt]);
-            add_row(k_fm_reg, k_fm_reg, min_fm_vec);
-            exp(k_fm_reg, k_fm_reg);
-            warpgroup::store(k_smem[tic][rt], k_fm_reg);
+            div_row(k_fm_reg[rt - 2], k_fm_reg[rt - 2], sum_fm_vec);
+            warpgroup::store(k_smem[tic][rt], k_fm_reg[rt - 2]);
         }
         __syncthreads();
         // ******* feature map done ******** // 
-
         zero(local_attn); 
         for (int j = 0; j < 4; j++) {
             warpgroup::mma_fence(local_attn); 
@@ -233,21 +258,27 @@ void hedgehog_linear_attention(int n, const CUtensorMap* tma_q, const CUtensorMa
         cumulative_add(k_c_smem[warpid], k_smem[tic][warpid]);
         __syncthreads();
 
-        zero(den_vec); 
-        for (auto rt = 0; rt < 4; rt++) {
-            auto &k_c_2_smem = reinterpret_cast<st_bf<4, 4, wgmma_swizzle_l>&>(k_c_smem[rt]);
+        if (block > 0) {
+            zero(den_vec);
+            add(den_vec, den_vec, 1e-6f);
+            for (auto rt = 0; rt < 4; rt++) {
+                auto &k_c_2_smem = reinterpret_cast<st_bf<4, 4, kittens::ducks::st_layout::wgmma_swizzle>&>(k_c_smem[rt]);
+            
+                warpgroup::load(q_reg, q_smem[tic][rt]);
+                warpgroup::load(k_c_reg, k_c_2_smem);
 
-            warpgroup::load(q_reg, q_smem[tic][rt]);
-            warpgroup::load(k_c_reg, k_c_2_smem);
-
-            mul(q_reg, q_reg, k_c_reg);
-            row_sum(den_vec, q_reg, den_vec);
+                mul(q_reg, q_reg, k_c_reg);
+                row_sum(den_vec, q_reg, den_vec);
+            }
         }
-        
+        else {
+            row_sum(den_vec, local_attn, den_vec);
+        }
         div_row(local_o, local_o, den_vec);
 
-        auto &o_smem = reinterpret_cast<tile_o_smem&>(v_smem[tic][0]);
-        warpgroup::store(o_smem, local_o); 
+        auto &o_smem = reinterpret_cast<st_bf<4, 8, kittens::ducks::st_layout::wgmma_swizzle>&>(v_smem[tic][0]);
+        copy(kv_bf[0], local_o);
+        warpgroup::store(o_smem, kv_bf[0]); 
         __syncthreads(); 
 
         if (warpid == 0) {
@@ -259,7 +290,7 @@ void hedgehog_linear_attention(int n, const CUtensorMap* tma_q, const CUtensorMa
     }
 
     for (int rt = 0; rt < 4; rt++) {
-        auto &kv_smem_2 = reinterpret_cast<tile_kv2_smem&>(kv_smem);
+        auto &kv_smem_2 = reinterpret_cast<st_bf<4, 8, kittens::ducks::st_layout::wgmma_swizzle>&>(kv_smem);
         warpgroup::store(kv_smem_2, local_kv[rt]); 
         __syncthreads();
 

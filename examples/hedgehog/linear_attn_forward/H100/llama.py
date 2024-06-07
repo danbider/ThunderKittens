@@ -18,6 +18,8 @@ project_root = os.path.abspath(os.path.join(current_dir, "../"))
 sys.path.insert(0, project_root)
 sys.path.append('build/lib.linux-x86_64-3.10')
 
+print(sys.path)
+
 import lin_attn_h100 as tk_kernel
 
 from collections import defaultdict
@@ -39,6 +41,10 @@ q = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda'))
 k = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda'))
 v = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda'))
 
+# q = torch.abs(q)
+# k = torch.abs(k)
+# v = torch.abs(v)
+
 q = q/(float(D)**.5)
 k = k/(float(D)**.5)
 v = v/(float(D)**.5)
@@ -54,6 +60,32 @@ def linear_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, kv_state
         
     return o, kv_state, None
 
+def pytorch_softmax_gt(x):
+    
+    x_pos = x
+    x_neg = -x
+    
+    x_pos_max = torch.amax(x_pos, dim=-1, keepdim=True)
+    x_neg_max = torch.amax(x_neg, dim=-1, keepdim=True)
+    
+    # softmax(x) = torch.exp(x - x_max) / torch.sum(torch.exp(x - x_max), dim=-1) 
+    
+    x_pos = x_pos - x_pos_max
+    x_neg = x_neg + x_neg_max
+    
+    x_pos_num = torch.exp(x_pos)
+    x_pos_den = torch.sum(torch.exp(x_pos), dim=-1, keepdim=True)
+    
+    x_neg_num = torch.exp(x_neg)
+    x_neg_den = torch.sum(torch.exp(x_neg), dim=-1, keepdim=True)
+    
+    x_pos = x_pos_num / x_pos_den
+    x_neg = x_neg_num / x_neg_den
+    
+    x = torch.cat([x_pos, x_neg], dim=-1).clamp(min=1e-6)
+    
+    return x
+
 def quadratic_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
                         causal: bool = True) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
     
@@ -68,6 +100,9 @@ def quadratic_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
     k = torch.cat([
         torch.exp(k - k_max), torch.exp(-k + k_min)
     ], dim=-1)
+    
+    # q = pytorch_softmax_gt(q)
+    # k = pytorch_softmax_gt(k)
     
     y = None
     a = torch.einsum('bhmd,bhnd->bhmn', q, k)  # note we don't scale, tho we could
@@ -97,6 +132,19 @@ print(f"Max diff out: {torch.max(torch.abs(linear_out - quadratic_out)).item()}"
 print(f"Avg diff out: {torch.mean(torch.abs(linear_out - quadratic_out)).item()}")
 
 # print out the last 10 elements
-print(f"Linear out: {linear_out[0, 0, -10:, -5:]}")
-print(f"Quadratic out: {quadratic_out[0, 0, -10:, -5:]}")
+print(f"Linear out: {linear_out[0, 0, :10, -5:]}")
+print(f"Quadratic out: {quadratic_out[0, 0, :10, -5:]}")
+
+# call linear attention again to see if it is deterministic
+q_2 = q.clone()
+k_2 = k.clone()
+v_2 = v.clone()
+kv_state_2 = kv_state.clone()
+o_2 = o.clone()
+
+linear_out_2, linear_kv_state_2, _    = linear_attention(q_2, k_2, v_2, kv_state_2, o_2)
+
+# compare linear_out and linear_out_2
+print(f"Max diff out: {torch.max(torch.abs(linear_out - linear_out_2)).item()}")
+    
 

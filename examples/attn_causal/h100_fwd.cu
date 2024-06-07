@@ -1,4 +1,4 @@
-// #define TORCH_COMPILE // defined by default for PyTorch bindings - to use cpp harness, comment this out
+#define TORCH_COMPILE // defined by default for PyTorch bindings - to use cpp harness, comment this out
 
 #ifdef TORCH_COMPILE
 #include "src/kittens.cuh"

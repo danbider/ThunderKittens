@@ -126,21 +126,21 @@ def pytorch_test(Q, K, V):
 ans, pt_last_kv_state = pytorch_test(q_pt, k_pt, v_pt)
 
 # print 1/100 of mag of ans
-print("1/100 of avg mag of ans: ", torch.mean(torch.abs(ans)).item()/100)
-print("1/100 of avg mag of kv_state: ", torch.mean(torch.abs(pt_last_kv_state)).item()/100)
+# print("1/100 of avg mag of ans: ", torch.mean(torch.abs(ans)).item()/100)
+# print("1/100 of avg mag of kv_state: ", torch.mean(torch.abs(pt_last_kv_state)).item()/100)
 
-# print avg diff between o and ans
-print("avg diff out: ", torch.mean(torch.abs(o - ans)).item())
-print("avg diff kv_state: ", torch.mean(torch.abs(kv_state - pt_last_kv_state)).item())
+# # print avg diff between o and ans
+# print("avg diff out: ", torch.mean(torch.abs(o - ans)).item())
+# print("avg diff kv_state: ", torch.mean(torch.abs(kv_state - pt_last_kv_state)).item())
 
-# print max diff between o and ans
-print("o out: ", o[0, 0, -20:, :4])
-print("ans out: ", ans[0, 0, -20:, :4])
+# # print max diff between o and ans
+# print("o out: ", o[0, 0, -20:, :4])
+# print("ans out: ", ans[0, 0, -20:, :4])
 
 
-# print new line
-print("\n")
-print("-" * 80)
+# # print new line
+# print("\n")
+# print("-" * 80)
     
     
 #### CHUNKED SOFTMAX
@@ -149,9 +149,9 @@ q = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda'))
 k = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda'))
 v = (torch.randn((B, H, N, D), dtype=torch.bfloat16, device='cuda'))
 
-q = q/(float(D))
-k = k/(float(D))
-v = v/(float(D))
+q = q/(float(D)**.5)
+k = k/(float(D)**.5)
+v = v/(float(D)**.5)
 
 def pytorch_softmax(x):
     
@@ -252,10 +252,27 @@ def TK_sim(Q, K):
     
     return Q, K
         
+    
+# first make sure to check against pytorch softmax
+q_gt = pytorch_softmax_gt(q)
+k_gt = pytorch_softmax_gt(k)
+q_pt = pytorch_softmax(q)
+k_pt = pytorch_softmax(k)
+
+# pring avg mag of q_pt, k_pt
+print("1/100 of avg mag of q: ", torch.mean(torch.abs(q_pt)).item()/100)
+print("1/100 of avg mag of k: ", torch.mean(torch.abs(k_pt)).item()/100)
+
+print("q GT check: ", torch.mean(torch.abs(q_gt - q_pt)).item())
+print("k GT check: ", torch.mean(torch.abs(k_gt - k_pt)).item())
+
+print("\n")
+print("Now checking TK sim")
+print("\n")
 
 # print 1/100 of mag
-print("1/100 of avg mag of q: ", torch.mean(torch.abs(q)).item()/100)
-print("1/100 of avg mag of k: ", torch.mean(torch.abs(k)).item()/100)
+print("1/100 of avg mag of q: ", torch.mean(torch.abs(q_gt)).item()/100)
+print("1/100 of avg mag of k: ", torch.mean(torch.abs(k_gt)).item()/100)
 
 q_gt = pytorch_softmax_gt(q)
 k_gt = pytorch_softmax_gt(k)

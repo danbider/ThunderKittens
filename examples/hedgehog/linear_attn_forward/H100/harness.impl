@@ -4,7 +4,7 @@
 
 #define ATTN_B 1
 #define ATTN_H 1
-#define ATTN_N 4096
+#define ATTN_N 64
 
 #define CudaCheckError()    __cudaCheckError( __FILE__, __LINE__ )
 inline void __cudaCheckError( const char *file, const int line ) {
@@ -108,11 +108,11 @@ int main(int argc, char **argv) {
     unsigned long mem_size = kittens::MAX_SHARED_MEMORY; // have the flag tell us
     std::cout << "Setting max block shared memory to " << mem_size << std::endl;
 
-    CUtensorMap* tma_q_d  = tma::allocate_and_create_tensor_map<tile_q_smem>  (d_q,        (ATTN_B*ATTN_H*ATTN_N/(16 * 4)), ATTN_D/(16 * 4)); 
-    CUtensorMap* tma_k_d  = tma::allocate_and_create_tensor_map<tile_k_smem>  (d_k,        (ATTN_B*ATTN_H*ATTN_N/(16 * 4)), ATTN_D/(16 * 4));
-    CUtensorMap* tma_v_d  = tma::allocate_and_create_tensor_map<tile_vo_smem> (d_v,        (ATTN_B*ATTN_H*ATTN_N/(16 * 4)), ATTN_D/(16 * 8));
-    CUtensorMap* tma_o_d  = tma::allocate_and_create_tensor_map<tile_o_smem > (d_o,        (ATTN_B*ATTN_H*ATTN_N/(16 * 4)), ATTN_D/(16 * 8));
-    CUtensorMap* tma_kv_d = tma::allocate_and_create_tensor_map<tile_kv2_smem>(d_kv_state, (ATTN_B*ATTN_H*ATTN_F/(16 * 4)), ATTN_D/(16 * 8));
+    CUtensorMap* tma_q_d  = tma::allocate_and_create_tensor_map<st_bf<4, 4, kittens::ducks::st_layout::wgmma_swizzle>>(d_q, (ATTN_B*ATTN_H*ATTN_N/(16 * 4)), ATTN_D/(16 * 4)); 
+    CUtensorMap* tma_k_d  = tma::allocate_and_create_tensor_map<st_bf<4, 4, kittens::ducks::st_layout::wgmma_interleave>>(d_k, (ATTN_B*ATTN_H*ATTN_N/(16 * 4)), ATTN_D/(16 * 4));
+    CUtensorMap* tma_v_d  = tma::allocate_and_create_tensor_map<st_bf<4, 8, kittens::ducks::st_layout::wgmma_interleave>>(d_v, (ATTN_B*ATTN_H*ATTN_N/(16 * 4)), ATTN_D/(16 * 8));
+    CUtensorMap* tma_o_d  = tma::allocate_and_create_tensor_map<st_bf<4, 8, kittens::ducks::st_layout::wgmma_swizzle>>(d_o, (ATTN_B*ATTN_H*ATTN_N/(16 * 4)), ATTN_D/(16 * 8));
+    CUtensorMap* tma_kv_d = tma::allocate_and_create_tensor_map<st_bf<4, 8, kittens::ducks::st_layout::wgmma_swizzle>>(d_kv_state, (ATTN_B*ATTN_H*ATTN_F/(16 * 4)), ATTN_D/(16 * 8));
     
     using T = kittens::bf16;
     using H = kittens::bf16;

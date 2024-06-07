@@ -107,6 +107,16 @@ __device__ static inline void one(T &dst) {
     unary_op<base_ops::one, T>(dst, dst);
 }
 /**
+ * @brief Sets all elements of a register vector to 1e-6.
+ *
+ * @tparam T Register vector type.
+ * @param dst[out] Destination vector to be set to one.
+ */
+template<ducks::rv::all T>
+__device__ static inline void noise(T &dst) {
+    unary_op<base_ops::noise, T>(dst, dst);
+}
+/**
  * @brief Sets all elements of a register vector to positive infinity.
  *
  * @tparam T Register vector type.

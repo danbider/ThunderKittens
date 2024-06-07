@@ -43,6 +43,17 @@ struct one {
     template<typename T, typename... args> __device__ static inline constexpr T op(args... _) { return base_types::constants<T>::one();       }
 };
 /**
+ * @brief Represents the noise constant operation.
+ *
+ * This operation returns the noise value of the specified type.
+ *
+ * @tparam T The data type for which to return the noise value.
+ * @return The noise value of type T.
+ */
+struct noise {
+    template<typename T, typename... args> __device__ static inline constexpr T op(args... _) { return base_types::constants<T>::noise();       }
+};
+/**
  * @brief Represents the positive infinity constant operation.
  *
  * This operation returns the positive infinity value of the specified type.

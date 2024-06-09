@@ -38,6 +38,7 @@ void fwd_attend_ker_dim(int N, const CUtensorMap* tma_q, const CUtensorMap* tma_
     st_bf<qo_height, tile_width, layout_q> (&q_smem)   [NUM_WARPGROUPS] = al.allocate<st_bf<qo_height, tile_width, layout_q>,    NUM_WARPGROUPS>();
     st_bf<kv_height, tile_width, layout_k> (&k_smem)[2][NUM_WORKERS_KV] = al.allocate<st_bf<kv_height, tile_width, layout_k>, 2, NUM_WORKERS_KV>();
     st_bf<kv_height, tile_width, layout_v> (&v_smem)[2][NUM_WORKERS_KV] = al.allocate<st_bf<kv_height, tile_width, layout_v>, 2, NUM_WORKERS_KV>();
+    st_bf<qo_height, tile_width, layout_o> (&o_smem)   [NUM_WARPGROUPS] = *reinterpret_cast<st_bf<qo_height, tile_width, layout_o>(*)[NUM_WARPGROUPS]>(q_smem); // reuse q memory
 
     int tic = 0, toc = 1;
  
@@ -52,54 +53,38 @@ void fwd_attend_ker_dim(int N, const CUtensorMap* tma_q, const CUtensorMap* tma_
 
     int kv_blocks = N / (NUM_WORKERS_KV*k_smem[0][0].rows);
 
-    __shared__ uint64_t qsmem_barrier, kvsmem_barrier;//, vsmem_barrier;
+    __shared__ uint64_t qsmem_barrier, ksmem_barrier, vsmem_barrier;
+    TileIterator<st_bf<qo_height, tile_width, layout_q>, NUM_WARPGROUPS> q_iterator(tma_q, gridDim.x, blockIdx.y, &qsmem_barrier); 
+    TileIterator<st_bf<kv_height, tile_width, layout_k>, NUM_WORKERS_KV> k_iterator(tma_k, kv_blocks, blockIdx.y, &ksmem_barrier); 
+    TileIterator<st_bf<kv_height, tile_width, layout_v>, NUM_WORKERS_KV> v_iterator(tma_v, kv_blocks, blockIdx.y, &vsmem_barrier); 
+    TileIterator<st_bf<qo_height, tile_width, layout_o>, NUM_WARPGROUPS> o_iterator(tma_o, gridDim.x, blockIdx.y);
 
-    int q_phasebit = 0;
-    int kv_phasebit = 0;
-
-    if (threadIdx.x == 0) {
-        tma::init_barrier<st_bf<qo_height, tile_width, layout_q>, NUM_WARPGROUPS>(qsmem_barrier, 1);
-        tma::init_barrier<st_bf<kv_height, tile_width, layout_k>, NUM_WORKERS_KV*2>(kvsmem_barrier, 1); 
-    }
-
-    if (warpid == 0) {
-        for (int wg = 0; wg < NUM_WORKERS/kittens::WARPGROUP_WARPS; wg++) { // load q
-            int tile_idx = (blockIdx.y * NUM_WARPGROUPS * gridDim.x) + (blockIdx.x * NUM_WARPGROUPS) + wg;
-            tma::load_async((q_smem[wg]), tma_q, qsmem_barrier, tile_idx); 
-        }
-        for (int w = 0; w < NUM_WORKERS_KV; w++) { // load k, v      
-            int tile_idx = (blockIdx.y * NUM_WORKERS_KV * kv_blocks) + (0 * NUM_WORKERS_KV) + w; 
-            tma::load_async((k_smem[tic][w]), tma_k, kvsmem_barrier, tile_idx); 
-            tma::load_async((v_smem[tic][w]), tma_v, kvsmem_barrier, tile_idx); 
-        }
-    }
+    q_iterator.load_async(q_smem, blockIdx.x);
+    k_iterator.load_async(k_smem[tic]); 
+    v_iterator.load_async(v_smem[tic]); 
 
     neg_infty(max_vec); // zero registers for the Q chunk
     zero(norm_vec);
     zero(o_prev);
     __syncthreads();
 
-    tma::arrive_and_wait(qsmem_barrier, q_phasebit);
-    q_phasebit ^= 1;
+    q_iterator.arrive_and_wait(); 
 
     if constexpr (D == 64) { warpgroup::mul(q_smem[warpgroupid], q_smem[warpgroupid], __float2bfloat16(0.125f)); } 
     else { warpgroup::mul(q_smem[warpgroupid], q_smem[warpgroupid], __float2bfloat16(0.08838834764f)); }
 
-    for (auto kv_idx = 0; kv_idx < kv_blocks; kv_idx++, tic ^= 1, toc ^= 1) {
-        tma::arrive_and_wait(kvsmem_barrier, kv_phasebit);
-        kv_phasebit ^= 1;
+    while (k_iterator.hasNext()) {
 
+        k_iterator.arrive_and_wait(); 
+        v_iterator.arrive_and_wait(); 
         __syncthreads();
-        if (warpid == 0) {
-            tma::set_bytes(kvsmem_barrier, 2 * NUM_WORKERS_KV * k_smem[0][0].num_elements * sizeof(bf16));
 
-            if (kv_idx + 1 < kv_blocks) {
-                for (int w = 0; w < NUM_WORKERS_KV; w++) {        
-                    int tile_idx = (blockIdx.y * NUM_WORKERS_KV * kv_blocks) + ((kv_idx + 1) * NUM_WORKERS_KV) + w; 
-                    tma::load_async((k_smem[toc][w]), tma_k, kvsmem_barrier, tile_idx); 
-                    tma::load_async((v_smem[toc][w]), tma_v, kvsmem_barrier, tile_idx);
-                }
-            }
+        if (k_iterator.hasNext()) {
+            k_iterator++;
+            v_iterator++;
+
+            k_iterator.load_async(k_smem[toc]); 
+            v_iterator.load_async(v_smem[toc]);
         }
 
         warpgroup::mma_fence(att_block);
@@ -131,18 +116,15 @@ void fwd_attend_ker_dim(int N, const CUtensorMap* tma_q, const CUtensorMap* tma_
         warpgroup::mma_fence(o_prev);
         warpgroup::mma_AB(o_prev, att_block_mma, v_smem[tic][0]);
         warpgroup::mma_commit_group();
+
+        tic ^= 1; 
+        toc ^= 1; 
     }
 
-    auto (*o_smem) = reinterpret_cast<st_bf<qo_height, tile_width, layout_o>(*)>(q_smem); // reuse q memory
     warpgroup::store(o_smem[warpgroupid], o_prev); 
     __syncthreads();
-    
-    if (warpid % 4 == 0) { // store o
-        int tile_idx = (blockIdx.y * NUM_WARPGROUPS * gridDim.x) + (blockIdx.x * NUM_WARPGROUPS) + warpgroupid;
-        tma::store_async(tma_o, (o_smem[warpgroupid]), tile_idx); 
-        tma::store_commit_group(); 
-    }
 
+    o_iterator.store_async(o_smem, blockIdx.x);
     tma::store_async_wait();
 }
 

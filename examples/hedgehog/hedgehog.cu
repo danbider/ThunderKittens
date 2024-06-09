@@ -101,7 +101,7 @@ void hedgehog_attention(int n,
         tma::init_barrier(qkv_barrier, 1); // barrier for q and k
         tma::set_bytes(qkv_barrier, 6*size_bytes<tile_q_smem> + 6*size_bytes<tile_k_smem> + size_bytes<tile_v_smem>);
 
-        int tile_idx = (blockIdx.x * blocks);
+        int tile_idx = (blockIdx.x * blocks) + (0);
         #pragma unroll
         for(int i = 0; i < 2; i++) {
             tma::load_async(q_smem[tic][i], tma_q, qkv_barrier, tile_idx, i);

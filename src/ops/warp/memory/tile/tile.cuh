@@ -12,4 +12,5 @@
 #ifdef KITTENS_HOPPER
 #include "tma.cuh"
 #include "dsmem.cuh"
+#include "iterator.cuh"
 #endif

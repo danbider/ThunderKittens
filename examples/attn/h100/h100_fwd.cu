@@ -53,38 +53,40 @@ void fwd_attend_ker_dim(int N, const CUtensorMap* tma_q, const CUtensorMap* tma_
 
     int kv_blocks = N / (NUM_WORKERS_KV*k_smem[0][0].rows);
 
+    // no more idx calculation - just instantiate an iterator and do:
+    // - .load_async
+    // - .arrive_and_wait
+    // - .hasNext
+    // - .store
     __shared__ uint64_t qsmem_barrier, ksmem_barrier, vsmem_barrier;
-    TileIterator<st_bf<qo_height, tile_width, layout_q>, NUM_WARPGROUPS> q_iterator(tma_q, gridDim.x, blockIdx.y, &qsmem_barrier); 
-    TileIterator<st_bf<kv_height, tile_width, layout_k>, NUM_WORKERS_KV> k_iterator(tma_k, kv_blocks, blockIdx.y, &ksmem_barrier); 
-    TileIterator<st_bf<kv_height, tile_width, layout_v>, NUM_WORKERS_KV> v_iterator(tma_v, kv_blocks, blockIdx.y, &vsmem_barrier); 
-    TileIterator<st_bf<qo_height, tile_width, layout_o>, NUM_WARPGROUPS> o_iterator(tma_o, gridDim.x, blockIdx.y);
+    TileIterator<st_bf<qo_height, tile_width, layout_q>, NUM_WARPGROUPS> Q(tma_q, gridDim.x, blockIdx.y, &qsmem_barrier); 
+    TileIterator<st_bf<kv_height, tile_width, layout_k>, NUM_WORKERS_KV> K(tma_k, kv_blocks, blockIdx.y, &ksmem_barrier); 
+    TileIterator<st_bf<kv_height, tile_width, layout_v>, NUM_WORKERS_KV> V(tma_v, kv_blocks, blockIdx.y, &vsmem_barrier); 
+    TileIterator<st_bf<qo_height, tile_width, layout_o>, NUM_WARPGROUPS> O(tma_o, gridDim.x, blockIdx.y);
 
-    q_iterator.load_async(q_smem, blockIdx.x);
-    k_iterator.load_async(k_smem[tic]); 
-    v_iterator.load_async(v_smem[tic]); 
+    Q.load_async(q_smem, blockIdx.x);
+    K.load_async(k_smem[tic]); 
+    V.load_async(v_smem[tic]); 
 
     neg_infty(max_vec); // zero registers for the Q chunk
     zero(norm_vec);
     zero(o_prev);
     __syncthreads();
 
-    q_iterator.arrive_and_wait(); 
+    Q.arrive_and_wait(); 
 
     if constexpr (D == 64) { warpgroup::mul(q_smem[warpgroupid], q_smem[warpgroupid], __float2bfloat16(0.125f)); } 
     else { warpgroup::mul(q_smem[warpgroupid], q_smem[warpgroupid], __float2bfloat16(0.08838834764f)); }
 
-    while (k_iterator.hasNext()) {
+    while (K.hasNext()) {
 
-        k_iterator.arrive_and_wait(); 
-        v_iterator.arrive_and_wait(); 
+        K.arrive_and_wait(); 
+        V.arrive_and_wait(); 
         __syncthreads();
 
-        if (k_iterator.hasNext()) {
-            k_iterator++;
-            v_iterator++;
-
-            k_iterator.load_async(k_smem[toc]); 
-            v_iterator.load_async(v_smem[toc]);
+        if (K.hasNext()) {
+            K++, K.load_async(k_smem[toc]); 
+            V++, V.load_async(v_smem[toc]);
         }
 
         warpgroup::mma_fence(att_block);
@@ -124,7 +126,7 @@ void fwd_attend_ker_dim(int N, const CUtensorMap* tma_q, const CUtensorMap* tma_
     warpgroup::store(o_smem[warpgroupid], o_prev); 
     __syncthreads();
 
-    o_iterator.store_async(o_smem, blockIdx.x);
+    O.store_async(o_smem, blockIdx.x);
     tma::store_async_wait();
 }
 

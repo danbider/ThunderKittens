@@ -80,7 +80,7 @@ def feedforward_benchmark(ff_layer, input_tensor):
     tflop += 2 * input_tensor.size(0) * input_tensor.size(1) * input_tensor.size(2) * ff_layer.w3.out_features / 1e12
     
     # F.silu(self.w1(x)) * self.w3(x)
-    tflop += 3 * input_tensor.size(0) * input_tensor.size(1) * ff_layer.w1.out_features / 1e12
+    tflop += 6 * input_tensor.size(0) * input_tensor.size(1) * ff_layer.w1.out_features / 1e12
     
     # self.w2(F.silu(self.w1(x)) * self.w3(x))
     tflop += 2 * input_tensor.size(0) * ff_layer.w1.out_features * ff_layer.w2.out_features / 1e12

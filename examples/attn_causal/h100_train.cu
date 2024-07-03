@@ -171,6 +171,7 @@ void attend_ker_fwd_train(const int N, CUtensorMap* tma_q, CUtensorMap* tma_k, C
         warpgroup::mma_fence(o_prev);
         warpgroup::mma_AB(o_prev, att_block_mma, v_smem[tic][0]);
         warpgroup::mma_commit_group();
+        warpgroup::mma_async_wait();
     }
 
     auto (*o_smem) = reinterpret_cast<st_bf<4, 4, layout_o>(*)>(q_smem); // reuse q memory

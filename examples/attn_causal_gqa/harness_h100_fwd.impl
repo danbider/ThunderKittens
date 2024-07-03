@@ -4,7 +4,7 @@
 
 constexpr int ATTN_B = 32; 
 constexpr int ATTN_N = 4096; 
-constexpr int ATTN_D = 128;
+constexpr int ATTN_D = 64;
 
 constexpr int QO_HEADS = 16; 
 constexpr int KV_HEADS = 8; 

@@ -74,9 +74,9 @@ void fwd_attend_ker_dim(int N, const CUtensorMap* tma_q, const CUtensorMap* tma_
     extern __shared__ int __shm[]; // this is the CUDA shared memory
     tma_swizzle_allocator al((int*)&__shm[0]);
 
-    st_bf<qo_height, D/kittens::TILE_DIM, layout_q>          (&q_smem)   [NUM_WARPGROUPS] = al.allocate<st_bf<qo_height, D/kittens::TILE_DIM, layout_q>,          NUM_WARPGROUPS>();
-    st_bf<kv_height, D/kittens::TILE_DIM, layout_k>          (&k_smem)[2][NUM_WORKERS_KV] = al.allocate<st_bf<kv_height, D/kittens::TILE_DIM, layout_k>, 2,       NUM_WORKERS_KV>();
-    st_bf<kv_height, D/kittens::TILE_DIM, layout_v>          (&v_smem)[2][NUM_WORKERS_KV] = al.allocate<st_bf<kv_height, D/kittens::TILE_DIM, layout_v>, 2,       NUM_WORKERS_KV>();
+    st_bf<qo_height, D/kittens::TILE_DIM, layout_q> (&q_smem)   [NUM_WARPGROUPS] = al.allocate<st_bf<qo_height, D/kittens::TILE_DIM, layout_q>,    NUM_WARPGROUPS>();
+    st_bf<kv_height, D/kittens::TILE_DIM, layout_k> (&k_smem)[2][NUM_WORKERS_KV] = al.allocate<st_bf<kv_height, D/kittens::TILE_DIM, layout_k>, 2, NUM_WORKERS_KV>();
+    st_bf<kv_height, D/kittens::TILE_DIM, layout_v> (&v_smem)[2][NUM_WORKERS_KV] = al.allocate<st_bf<kv_height, D/kittens::TILE_DIM, layout_v>, 2, NUM_WORKERS_KV>();
 
     int tic = 0, toc = 1;
  

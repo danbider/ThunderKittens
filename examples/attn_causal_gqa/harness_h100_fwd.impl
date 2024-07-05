@@ -4,7 +4,7 @@
 
 constexpr int ATTN_B = 32; 
 constexpr int ATTN_N = 4096; 
-constexpr int ATTN_D = 64;
+constexpr int ATTN_D = 128;
 
 constexpr int QO_HEADS = 16; 
 constexpr int KV_HEADS = 8; 
@@ -123,7 +123,7 @@ int main(int argc, char **argv) {
     unsigned long mem_size = 112000; // need to launch two blocks if possible.
     
     cudaFuncSetAttribute(
-        fwd_attend_ker_dim<ATTN_D, QK_HEAD_RATIO>,
+        fwd_attend_ker_dim<ATTN_D>,
         cudaFuncAttributeMaxDynamicSharedMemorySize,
         mem_size
     );
@@ -134,13 +134,13 @@ int main(int argc, char **argv) {
     cudaDeviceSynchronize();
     std::cout << "Starting warmup" << std::endl;
     for(int i = 0; i < ITER; i++) {    
-        fwd_attend_ker_dim<ATTN_D, QK_HEAD_RATIO><<<grid, BLOCK_SIZE, mem_size>>>(ATTN_N, tma_q_d, tma_k_d, tma_v_d, tma_o_d); 
+        fwd_attend_ker_dim<ATTN_D><<<grid, BLOCK_SIZE, mem_size>>>(ATTN_N, QK_HEAD_RATIO, tma_q_d, tma_k_d, tma_v_d, tma_o_d); 
     }
     cudaDeviceSynchronize();
     std::cout << "Starting kernel" << std::endl;
     const auto start = std::chrono::high_resolution_clock::now();
     for(int i = 0; i < ITER; i++) {
-        fwd_attend_ker_dim<ATTN_D, QK_HEAD_RATIO><<<grid, BLOCK_SIZE, mem_size>>>(ATTN_N, tma_q_d, tma_k_d, tma_v_d, tma_o_d); 
+        fwd_attend_ker_dim<ATTN_D><<<grid, BLOCK_SIZE, mem_size>>>(ATTN_N, QK_HEAD_RATIO, tma_q_d, tma_k_d, tma_v_d, tma_o_d); 
     }
     cudaDeviceSynchronize();
     const auto finish = std::chrono::high_resolution_clock::now();

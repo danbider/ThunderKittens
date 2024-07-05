@@ -1,0 +1,3 @@
+# ninja log v5
+1	15808	1720138952621574418	/home/bfs/aaryan/ThunderKittens/examples/attn_causal_gqa/build/temp.linux-x86_64-cpython-311/h100_fwd_frontend.o	abf4324e51ec5e2c
+1	55722	1720138992496304795	/home/bfs/aaryan/ThunderKittens/examples/attn_causal_gqa/build/temp.linux-x86_64-cpython-311/h100_fwd.o	9127fb4b0f54a440

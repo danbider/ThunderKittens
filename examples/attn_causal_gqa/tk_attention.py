@@ -58,38 +58,43 @@ class TKLlamaAttention(LlamaAttention):
         key_states = key_states.to(torch.bfloat16)
         value_states = value_states.to(torch.bfloat16)
         
+        # Regular pytorch attention #
         ##########
         ##########
-        # attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
-        # if attention_mask is not None:  # no matter the length, we just slice it
-        #     causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
-        #     attn_weights = attn_weights + causal_mask
+        if attention_mask is not None:  # no matter the length, we just slice it
+            causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
+            attn_weights = attn_weights + causal_mask
 
-        # attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.bfloat16).to(torch.bfloat16)
-        # attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
-        # attn_output = torch.matmul(attn_weights, value_states)
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.bfloat16).to(torch.bfloat16)
+        attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
+        attn_output = torch.matmul(attn_weights, value_states)
         
-        # if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
-        #     raise ValueError(
-        #         f"`attn_output` should be of size {(bsz, self.num_heads, q_len, self.head_dim)}, but is"
-        #         f" {attn_output.size()}"
-        #     )
+        if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
+            raise ValueError(
+                f"`attn_output` should be of size {(bsz, self.num_heads, q_len, self.head_dim)}, but is"
+                f" {attn_output.size()}"
+            )
         
-        # attn_output = attn_output.transpose(1, 2).contiguous()
-        # attn_output = attn_output.reshape(bsz, q_len, -1)
-        # breakpoint() # torch.Size([1, 3, 4096])
-        # attn_output = self.o_proj(attn_output.to(torch.float32))
-        ##########
-        ##########
-        query_states = query_states.transpose(1, 2)
-        key_states = key_states.transpose(1, 2)
-        value_states = value_states.transpose(1, 2)
-        attn_output = torch.nn.functional.scaled_dot_product_attention(query_states, key_states, value_states, is_causal=True)
-        
+        attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(bsz, q_len, -1)
-        # breakpoint() # torch.Size([1, 3, 4096])
+        breakpoint() # torch.Size([1, 3, 4096])
         attn_output = self.o_proj(attn_output.to(torch.float32))
+        ##########
+        ##########
+        
+        # Flash attention #
+        ##########
+        ##########
+        # query_states = query_states.transpose(1, 2)
+        # key_states = key_states.transpose(1, 2)
+        # value_states = value_states.transpose(1, 2)
+        # attn_output = torch.nn.functional.scaled_dot_product_attention(query_states, key_states, value_states, is_causal=True)
+        
+        # attn_output = attn_output.reshape(bsz, q_len, -1)
+        # # breakpoint() # torch.Size([1, 3, 4096])
+        # attn_output = self.o_proj(attn_output.to(torch.float32))
         ##########
         ##########
 

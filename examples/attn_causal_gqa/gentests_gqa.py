@@ -31,16 +31,45 @@ o, _ = scaled_dot_product_gqa(
     need_weights=False,
 )
 o = o.permute(0, 2, 1, 3).contiguous()
+
+##########################################
+### EXACT GQA COMPUTATION FROM LLAMA 3 ###
+def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
+    """torch.repeat_interleave(x, dim=2, repeats=n_rep)"""
+    bs, slen, n_kv_heads, head_dim = x.shape
+    if n_rep == 1:
+        return x
+    return (
+        x[:, :, :, None, :]
+        .expand(bs, slen, n_kv_heads, n_rep, head_dim)
+        .reshape(bs, slen, n_kv_heads * n_rep, head_dim)
+    )
+
+
+keys_l = repeat_kv(k.permute(0, 2, 1, 3), H_QO // H_KV).permute(0, 2, 1, 3)
+values_l = repeat_kv(v.permute(0, 2, 1, 3), H_QO // H_KV).permute(0, 2, 1, 3)
+
+scores = torch.matmul(q, keys_l.transpose(2, 3)) / math.sqrt(D)
+
+mask = torch.full((N, N), float('-inf'), device=q.device, dtype=q.dtype)
+mask = torch.triu(mask, diagonal=1)
+if mask is not None:
+    scores = scores + mask  # (bs, n_local_heads, seqlen, cache_len + seqlen)
+scores = torch.nn.functional.softmax(scores, dim=-1).type_as(q)
+output = torch.matmul(scores, values_l)  # (bs, n_local_heads, seqlen, head_dim)
+### EXACT GQA COMPUTATION FROM LLAMA 3 ###
+##########################################
+
+# assert that output == o
+breakpoint()
+assert torch.allclose(output, o, atol=1e-3)
+
+# now do backwards computations
 o.backward(grad_output)
 
 q_grad = q.grad
 k_grad = k.grad
 v_grad = v.grad
-
-if (H_QO == H_KV):
-    o_ = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=True)
-    # compare outputs
-    print("Difference: ", torch.abs(o - o_).max())
     
 softmax_scale = 1 / math.sqrt(D)
 l_vec = torch.empty((B, H_QO, N, N), dtype=torch.bfloat16, device=q.device)

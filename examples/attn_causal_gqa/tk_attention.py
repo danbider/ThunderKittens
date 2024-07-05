@@ -76,10 +76,9 @@ class TKLlamaAttention(LlamaAttention):
                 f"`attn_output` should be of size {(bsz, self.num_heads, q_len, self.head_dim)}, but is"
                 f" {attn_output.size()}"
             )
-        
         attn_output = attn_output.transpose(1, 2).contiguous()
+        
         attn_output = attn_output.reshape(bsz, q_len, -1)
-        breakpoint() # torch.Size([1, 3, 4096])
         attn_output = self.o_proj(attn_output.to(torch.float32))
         ##########
         ##########
@@ -87,13 +86,12 @@ class TKLlamaAttention(LlamaAttention):
         # Flash attention #
         ##########
         ##########
-        # query_states = query_states.transpose(1, 2)
-        # key_states = key_states.transpose(1, 2)
-        # value_states = value_states.transpose(1, 2)
-        # attn_output = torch.nn.functional.scaled_dot_product_attention(query_states, key_states, value_states, is_causal=True)
-        
+        # attn_output = torch.nn.functional.scaled_dot_product_attention(query_states.transpose(1, 2), 
+        #                                                                key_states.transpose(1, 2), 
+        #                                                                value_states.transpose(1, 2), is_causal=True)
         # attn_output = attn_output.reshape(bsz, q_len, -1)
-        # # breakpoint() # torch.Size([1, 3, 4096])
+        # if (self.o_proj.in_features != 4096 or self.o_proj.out_features != 4096):
+        #     breakpoint()
         # attn_output = self.o_proj(attn_output.to(torch.float32))
         ##########
         ##########

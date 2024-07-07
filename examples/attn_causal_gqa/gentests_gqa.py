@@ -23,6 +23,7 @@ k = (torch.randn((B, H_KV, N, D), dtype=torch.bfloat16, device='cuda')).requires
 v = (torch.randn((B, H_KV, N, D), dtype=torch.bfloat16, device='cuda')).requires_grad_()
 grad_output = (torch.randn((B, H_QO, N, D), dtype=torch.bfloat16, device='cuda'))
 
+# pad seqlen to multiple of 128
 o, _ = scaled_dot_product_gqa(
     q.permute(0, 2, 1, 3).contiguous(),
     k.permute(0, 2, 1, 3).contiguous(),

@@ -220,6 +220,12 @@ void attention_forward_causal_gqa(torch::Tensor q, torch::Tensor k, torch::Tenso
     // make sure sequence length is multiple of 128 for now
     TORCH_CHECK(N % (NUM_WORKERS * kittens::TILE_DIM) == 0, "Please pad sequence length to be multiple of 128");
 
+    // torch check that all input tensors have same
+    // sequence length
+    TORCH_CHECK(q.size(2) == k.size(2) == v.size(2), "q, k, v must have same sequence length");
+    TORCH_CHECK(o.size(2) == q.size(2), "o must have same sequence length as q, k, v");
+    // this is a prefill kernel, there is a separate kernel for decoding
+
     // make sure D = 64 or 128
     TORCH_CHECK(D == 64 | D == 128, "Currently, only D = 64 or 128 is supported");
 

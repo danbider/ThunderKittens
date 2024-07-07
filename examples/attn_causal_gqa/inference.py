@@ -33,7 +33,7 @@ def main(
     model_name,
     peft_model: str = None,
     quantization: bool = False,
-    max_new_tokens = 100,
+    max_new_tokens = 20,
     prompt_file: str = None,
     seed: int = 42,
     do_sample: bool = True,
@@ -52,7 +52,6 @@ def main(
     use_fast_kernels: bool = False,
     **kwargs
 ):
-
     def inference(user_prompt, temperature, top_p, top_k, max_new_tokens, **kwargs):
         safety_checker = get_safety_checker(
             enable_azure_content_safety,

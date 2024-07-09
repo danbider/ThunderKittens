@@ -122,7 +122,7 @@ class TKLlamaAttention(LlamaAttention):
         ##########
         attn_output_2 = attn_output_2.transpose(1, 2).contiguous()
         attn_output_2 = attn_output_2.reshape(bsz, q_len, -1)
-        attn_output_2 = self.o_proj(attn_output_2.float())
+        attn_output_2 = self.o_proj(attn_output_2)
 
         # attn_output_3 = attn_output_3.transpose(1, 2).contiguous()
         # attn_output_3 = attn_output_3.reshape(bsz, q_len, -1)

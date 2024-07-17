@@ -3,11 +3,11 @@ import sys
 import os
 import time
 
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.abspath(os.path.join(current_dir, "../../"))
-sys.path.insert(0, project_root)
-from src.common.pyutils.test_build_utils import __eq
-sys.path.append('build/lib.linux-x86_64-3.10')
+# current_dir = os.path.dirname(os.path.abspath(__file__))
+# project_root = os.path.abspath(os.path.join(current_dir, "../../"))
+# sys.path.insert(0, project_root)
+# from src.common.pyutils.test_build_utils import __eq
+# sys.path.append('build/lib.linux-x86_64-3.10')
 import h100_fwd as mod
 
 from collections import defaultdict
@@ -23,8 +23,22 @@ def pytorch_test(Q, K, V):
     return output
 
 def h100_fwd_kernel_test(Q, K, V):
+    
+    seq_len = Q.size(2)
+    padding = False
+    if seq_len % 256 != 0:
+        pad_len = 256 - (seq_len % 256)
+        Q = F.pad(Q, (0, 0, 0, pad_len))
+        K = F.pad(K, (0, 0, 0, pad_len))
+        V = F.pad(V, (0, 0, 0, pad_len))
+        padding = True
     o = torch.zeros_like(Q)
+    
     mod.attention_forward_causal(Q, K, V, o)
+    
+    if padding:
+        o = o[:, :, :seq_len, :]
+    
     return o
 
 def check_correctness(b, h, n, d):
@@ -37,6 +51,8 @@ def check_correctness(b, h, n, d):
     result_pytorch = pytorch_test(Q, K, V)
     tk_result = h100_fwd_kernel_test(Q, K, V)
     
+    breakpoint()
+    
     diff = result_pytorch - tk_result
     avg_diff_mag = torch.mean(torch.abs(diff)).item()
     avg_diff_per = 100 * avg_diff_mag / torch.mean(torch.abs(result_pytorch)).item()
@@ -46,6 +62,7 @@ def check_correctness(b, h, n, d):
 
 print("Correctness Tests: ")
 configurations = [
+    (2,  8, 3,     64),
     (2,  8, 256,   64),
     (4,  8, 512,   64),
     (8,  8, 1024,  64),

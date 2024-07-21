@@ -73,8 +73,8 @@ void fwd_attend_ker_dim(int N, const CUtensorMap* tma_q, const CUtensorMap* tma_
         init_barrier(ksmem_arrived[1], 0, 1); // no threads, one transaction
         init_barrier(vsmem_arrived[0], 0, 1); // no threads, one transaction
         init_barrier(vsmem_arrived[1], 0, 1); // no threads, one transaction
-        init_barrier(compute_done[0], CLUSTER_SIZE*NUM_CONSUMER_WARPGROUPS*WARPGROUP_THREADS, 0); // all the consumer threads, no transactions
-        init_barrier(compute_done[1], CLUSTER_SIZE*NUM_CONSUMER_WARPGROUPS*WARPGROUP_THREADS, 0); // all the consumer threads, no transactions
+        init_barrier(compute_done[0], CLUSTER_SIZE*NUM_CONSUMER_WARPGROUPS, 0); // all the consumer threads, no transactions
+        init_barrier(compute_done[1], CLUSTER_SIZE*NUM_CONSUMER_WARPGROUPS, 0); // all the consumer threads, no transactions
         
         tma::expect_bytes(qsmem_barrier, sizeof(q_tile)*NUM_CONSUMER_WARPGROUPS);
         for (int wg = 0; wg < NUM_CONSUMER_WARPGROUPS; wg++) { // load q
@@ -171,7 +171,9 @@ void fwd_attend_ker_dim(int N, const CUtensorMap* tma_q, const CUtensorMap* tma_
             warpgroup::mma_commit_group();
             warpgroup::mma_async_wait();
 
-            tma::cluster::arrive(compute_done[tic], 0);
+            if (threadIdx.x % 128 == 0) {
+                tma::cluster::arrive(compute_done[tic], 0);
+            }
         }
         
         auto (*o_smem) = reinterpret_cast<o_tile(*)>(q_smem); // reuse q memory

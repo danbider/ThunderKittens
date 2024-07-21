@@ -89,8 +89,12 @@ void fwd_attend_ker_dim(int N, const CUtensorMap* tma_q, const CUtensorMap* tma_
         int kv_tile_idx = (blockIdx.y * kv_blocks) + 0; 
         tma::expect_bytes(ksmem_arrived[0], sizeof(k_tile));
         tma::expect_bytes(vsmem_arrived[0], sizeof(v_tile));
+        tma::expect_bytes(ksmem_arrived[1], sizeof(k_tile));
+        tma::expect_bytes(vsmem_arrived[1], sizeof(v_tile));
         tma::load_async(k_smem[0], tma_k, ksmem_arrived[0], kv_tile_idx); 
         tma::load_async(v_smem[0], tma_v, vsmem_arrived[0], kv_tile_idx);
+        tma::load_async(k_smem[1], tma_k, ksmem_arrived[1], kv_tile_idx + 1); 
+        tma::load_async(v_smem[1], tma_v, vsmem_arrived[1], kv_tile_idx + 1);
     }
 
     cluster.sync();
@@ -102,17 +106,6 @@ void fwd_attend_ker_dim(int N, const CUtensorMap* tma_q, const CUtensorMap* tma_
         else if constexpr (NUM_CONSUMER_WARPGROUPS == 3) { asm volatile("setmaxnreg.dec.sync.aligned.u32 %0;\n" :: "n"(32)); }
         
         if(block_rank == 0 && warpid == NUM_WORKERS-4) {
-            tma::cluster::expect_bytes(ksmem_arrived[toc], sizeof(k_tile), 0);
-            tma::cluster::expect_bytes(ksmem_arrived[toc], sizeof(k_tile), 1);
-
-            tma::cluster::expect_bytes(vsmem_arrived[toc], sizeof(v_tile), 0);
-            tma::cluster::expect_bytes(vsmem_arrived[toc], sizeof(v_tile), 1);
-            
-            int tile_idx = (blockIdx.y * kv_blocks) + (0 + 1);
-            
-            tma::cluster::load_async(k_smem[toc], tma_k, ksmem_arrived[toc], tile_idx, 0, uint16_t(0xFFFF)>>(16-CLUSTER_SIZE));
-            tma::cluster::load_async(v_smem[toc], tma_v, vsmem_arrived[toc], tile_idx, 0, uint16_t(0xFFFF)>>(16-CLUSTER_SIZE));
-
             for (auto kv_idx = 1; kv_idx < kv_blocks; kv_idx++, tic=tic^1, toc=toc^1) {
 
                 tma::cluster::wait(compute_done_k[tic], ((kv_idx - 1)/2)%2);

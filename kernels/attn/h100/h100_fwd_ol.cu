@@ -98,8 +98,8 @@ void fwd_attend_ker_dim(int N, const CUtensorMap* tma_q, const CUtensorMap* tma_
 
     int tic = 0, toc = 1;
     if(warpgroupid == NUM_WARPGROUPS-1) { // producer warpgroup
-        //      if constexpr (NUM_CONSUMER_WARPGROUPS == 2) { asm volatile("setmaxnreg.dec.sync.aligned.u32 %0;\n" :: "n"(24)); }
-        // else if constexpr (NUM_CONSUMER_WARPGROUPS == 3) { asm volatile("setmaxnreg.dec.sync.aligned.u32 %0;\n" :: "n"(32)); }
+             if constexpr (NUM_CONSUMER_WARPGROUPS == 2) { asm volatile("setmaxnreg.dec.sync.aligned.u32 %0;\n" :: "n"(24)); }
+        else if constexpr (NUM_CONSUMER_WARPGROUPS == 3) { asm volatile("setmaxnreg.dec.sync.aligned.u32 %0;\n" :: "n"(32)); }
         
         if(block_rank == 0 && warpid == NUM_WORKERS-4) {
             tma::cluster::expect_bytes(ksmem_arrived[toc], sizeof(k_tile), 0);
@@ -140,8 +140,8 @@ void fwd_attend_ker_dim(int N, const CUtensorMap* tma_q, const CUtensorMap* tma_
         __syncthreads();
     }
     else { // consumer warpgroup
-        //      if constexpr (NUM_CONSUMER_WARPGROUPS == 2) { asm volatile("setmaxnreg.inc.sync.aligned.u32 %0;\n" :: "n"(240)); }
-        // else if constexpr (NUM_CONSUMER_WARPGROUPS == 3) { asm volatile("setmaxnreg.inc.sync.aligned.u32 %0;\n" :: "n"(160)); }
+             if constexpr (NUM_CONSUMER_WARPGROUPS == 2) { asm volatile("setmaxnreg.inc.sync.aligned.u32 %0;\n" :: "n"(240)); }
+        else if constexpr (NUM_CONSUMER_WARPGROUPS == 3) { asm volatile("setmaxnreg.inc.sync.aligned.u32 %0;\n" :: "n"(160)); }
 
         // premultiply by temperature
         if constexpr (D == 64) { warpgroup::mul(q_smem[warpgroupid], q_smem[warpgroupid], __float2bfloat16(0.125f * 1.44269504089f)); }

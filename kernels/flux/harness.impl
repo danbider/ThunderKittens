@@ -1,0 +1,241 @@
+#include <iostream>
+#include <string>
+#include <fstream>
+
+#define B 1
+#define H 24    
+#define D 3072  
+#define IMG_D 4080  
+#define TXT_D 512
+#define MULT_D 6
+#define HEAD_D 128  
+
+#define test_with_intermediates 1
+
+#define CudaCheckError()    __cudaCheckError( __FILE__, __LINE__ )
+inline void __cudaCheckError( const char *file, const int line ) {
+    cudaError err = cudaGetLastError();
+    if ( cudaSuccess != err )
+    {
+        fprintf( stderr, "cudaCheckError() failed at %s:%i : %s\n",
+                 file, line, cudaGetErrorString( err ) );
+        exit( -1 );
+    }
+    // More careful checking. However, this will affect performance.
+    // Comment away if needed.
+    err = cudaDeviceSynchronize();
+    if( cudaSuccess != err )
+    {
+        fprintf( stderr, "cudaCheckError() with sync failed at %s:%i : %s\n",
+                 file, line, cudaGetErrorString( err ) );
+        exit( -1 );
+    }
+}
+
+
+int main(int argc, char **argv) {
+    std::cout << "Entered main!" << std::endl;
+
+    // Inputs
+    constexpr int TOTAL_ELEMENTS_IMG = B*IMG_D*D;
+    constexpr int TOTAL_ELEMENTS_VEC = B*D;
+    constexpr int TOTAL_UNIQUE_ELEMENTS_IMG = IMG_D*D;
+    constexpr int TOTAL_UNIQUE_ELEMENTS_VEC = D;
+    float *img          = new float[TOTAL_UNIQUE_ELEMENTS_IMG];
+    float *vec          = new float[TOTAL_UNIQUE_ELEMENTS_VEC];
+
+    // Learned Parameters
+    constexpr int TOTAL_ELEMENTS_IMG_MOD = B*D;
+    float *img_mod_scale   = new float[TOTAL_ELEMENTS_IMG_MOD];
+    float *img_mod_shift   = new float[TOTAL_ELEMENTS_IMG_MOD];
+    bf16 *img_mod_scale_bf = new bf16[TOTAL_ELEMENTS_IMG_MOD];
+    bf16 *img_mod_shift_bf = new bf16[TOTAL_ELEMENTS_IMG_MOD];
+
+    // Intermediate outputs
+    constexpr int TOTAL_ELEMENTS_O = B*IMG_D*D;
+    constexpr int TOTAL_UNIQUE_ELEMENTS_O = IMG_D*D;
+    float *o_ref  = new float[TOTAL_UNIQUE_ELEMENTS_O];
+    bf16 *o_bf    = new bf16[TOTAL_ELEMENTS_O];
+    float *o      = new float[TOTAL_ELEMENTS_O];
+
+    // Outputs
+    constexpr int TOTAL_ELEMENTS_IMG_Q = B*H*IMG_D*HEAD_D;
+    constexpr int TOTAL_UNIQUE_ELEMENTS_IMG_Q = H*IMG_D*HEAD_D;
+    float *img_q_ref  = new float[TOTAL_UNIQUE_ELEMENTS_IMG_Q];
+    float *img_k_ref  = new float[TOTAL_UNIQUE_ELEMENTS_IMG_Q];
+    float *img_q  = new float[TOTAL_ELEMENTS_IMG_Q];
+    float *img_k  = new float[TOTAL_ELEMENTS_IMG_Q];
+
+    if(argc > 1) {
+        std::ifstream infile(argv[1]);
+
+        printf("Loading from %s\n", argv[1]);
+        std::cout << "Starting to enter!" << std::endl;
+
+        // Inputs
+        for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_IMG; i++) {  infile >> img[i];   }
+        std::cout << "Finished loading IMG" << std::endl;
+        for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_VEC; i++) {  infile >> vec[i];   }
+        std::cout << "Finished loading VEC" << std::endl;
+
+        // Outputs
+        for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_IMG_Q; i++) {  infile >> img_q_ref[i];  }
+        std::cout << "Finished loading IMG_Q" << std::endl;
+        for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_IMG_Q; i++) {  infile >> img_k_ref[i];   }
+        std::cout << "Finished loading IMG_K" << std::endl;
+
+        // Intermediate Outputs
+        for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_O; i++) {  infile >> o_ref[i];  }
+        std::cout << "Finished loading O_REF" << std::endl;
+
+        // Parameters
+        for(int i = 0; i < TOTAL_ELEMENTS_IMG_MOD; i++) {  infile >> img_mod_shift[i];   }
+        std::cout << "Finished loading IMG_SHIFT" << std::endl;
+        for(int i = 0; i < TOTAL_ELEMENTS_IMG_MOD; i++) {  infile >> img_mod_scale[i];   }
+        std::cout << "Finished loading IMG_SCALE" << std::endl;
+
+
+        std::cout << "Finished loading file from " << argv[1] << "!" << std::endl;
+    }
+
+    // Kernel inputs
+    bf16 *img_bf   = new bf16[TOTAL_ELEMENTS_IMG];
+    bf16 *vec_bf   = new bf16[TOTAL_ELEMENTS_VEC];
+    for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_IMG; i++) {
+        img_bf[i] = __float2bfloat16(img[i % TOTAL_UNIQUE_ELEMENTS_IMG]);
+    }
+    for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_VEC; i++) {
+        vec_bf[i] = __float2bfloat16(vec[i % TOTAL_UNIQUE_ELEMENTS_VEC]);
+    }
+    bf16 *d_img, *d_vec;
+    cudaMalloc(&d_img, TOTAL_ELEMENTS_IMG * sizeof(bf16));
+    cudaMalloc(&d_vec, TOTAL_ELEMENTS_VEC * sizeof(bf16));
+    cudaMemcpy(d_img, img_bf, TOTAL_ELEMENTS_IMG * sizeof(bf16), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_vec, vec_bf, TOTAL_ELEMENTS_VEC * sizeof(bf16), cudaMemcpyHostToDevice);
+
+    // Intermediate Outputs
+    bf16 *d_o, *d_o_resid;
+    cudaMalloc(&d_o, TOTAL_ELEMENTS_O * sizeof(bf16));
+    cudaMalloc(&d_o_resid, TOTAL_ELEMENTS_O * sizeof(bf16));
+
+    // Kernel Outputs
+    bf16 *img_q_bf  = new bf16[TOTAL_ELEMENTS_IMG_Q];
+    bf16 *img_k_bf  = new bf16[TOTAL_ELEMENTS_IMG_Q];
+    bf16 *d_img_q, *d_img_k;
+    cudaMalloc(&d_img_q, TOTAL_ELEMENTS_IMG_Q * sizeof(bf16));
+    cudaMalloc(&d_img_k, TOTAL_ELEMENTS_IMG_Q * sizeof(bf16));
+    cudaMemcpy(d_img_q, img_q_bf, TOTAL_ELEMENTS_IMG_Q * sizeof(bf16), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_img_k, img_k_bf, TOTAL_ELEMENTS_IMG_Q * sizeof(bf16), cudaMemcpyHostToDevice);
+
+    // Parameter inputs
+    for(int i = 0; i < TOTAL_ELEMENTS_IMG_MOD; i++) {
+        img_mod_scale_bf[i] = __float2bfloat16(img_mod_scale[i]);
+    }
+    for(int i = 0; i < TOTAL_ELEMENTS_IMG_MOD; i++) {
+        img_mod_shift_bf[i] = __float2bfloat16(img_mod_shift[i]);
+    }
+    bf16 *d_img_mod_scale, *d_img_mod_shift;
+    cudaMalloc(&d_img_mod_scale, TOTAL_ELEMENTS_IMG_MOD * sizeof(bf16));
+    cudaMalloc(&d_img_mod_shift, TOTAL_ELEMENTS_IMG_MOD * sizeof(bf16));
+    cudaMemcpy(d_img_mod_scale, img_mod_scale_bf, TOTAL_ELEMENTS_IMG_MOD * sizeof(bf16), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_img_mod_shift, img_mod_shift_bf, TOTAL_ELEMENTS_IMG_MOD * sizeof(bf16), cudaMemcpyHostToDevice);
+
+    cudaDeviceSynchronize();
+    CudaCheckError();
+    
+    unsigned long mem_size = 95480; // have the flag tell us
+    std::cout << "Setting max block shared memory to " << mem_size << std::endl;
+    using T = kittens::bf16;
+    cudaFuncSetAttribute(
+        flux_prepare,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        mem_size
+    );
+
+    const int ITER = 2;
+    cudaDeviceSynchronize();
+    CudaCheckError();
+    std::cout << "Starting kernel\n";
+    const auto start = std::chrono::high_resolution_clock::now();
+    for(int i = 0; i < ITER; i++) {  
+        flux_prepare<<<B,NUM_THREADS,mem_size>>>(
+            d_img, d_vec, d_img_mod_scale, d_img_mod_shift, d_o
+        );  
+    }
+    cudaDeviceSynchronize();
+    const auto finish = std::chrono::high_resolution_clock::now();
+    CudaCheckError();
+    std::cout << "Finished kernel\n";
+
+
+
+
+
+    
+    // check correctness
+    cudaMemcpy(img_q_bf, d_img_q, TOTAL_ELEMENTS_IMG_Q * sizeof(bf16), cudaMemcpyDeviceToHost);
+    for(int i = 0; i < TOTAL_ELEMENTS_IMG_Q; i++) { img_q[i] = __bfloat162float(img_q_bf[i]); }
+
+    bool good = true;
+    std::ofstream img_q_ref_file("printouts/img_q_ref.txt");
+    std::ofstream img_q_file("printouts/img_q.txt");
+    std::ofstream img_q_diff_file("printouts/img_q_diff.txt");
+    std::cout << "Total elements: " << TOTAL_ELEMENTS_IMG_Q << std::endl;
+    std::cout << "Total unique elements: " << TOTAL_UNIQUE_ELEMENTS_IMG_Q << std::endl;
+
+    for(int i = 0; i < TOTAL_ELEMENTS_IMG_Q; i++) {
+        float diff = img_q[i] - img_q_ref[i % TOTAL_UNIQUE_ELEMENTS_IMG_Q];
+        if(i < 1000) { // TOTAL_UNIQUE_ELEMENTS_IMG_Q
+            img_q_ref_file << img_q_ref[i % TOTAL_UNIQUE_ELEMENTS_IMG_Q] << ' ';
+            img_q_file << img_q[i] << ' ';
+            img_q_diff_file << diff << ' ';
+        }
+        if(abs(diff) > 0.1 || isnan(diff)) {
+            good = false;
+        }
+    }
+    if(good) std::cout << "Correct out :)\n";
+    else std::cout << "Incorrect out :(\n";
+
+    if (test_with_intermediates > 0) {
+        printf("Checking intermediates!\n");
+
+        // check correctness
+        cudaMemcpy(o_bf, d_o, TOTAL_ELEMENTS_O * sizeof(bf16), cudaMemcpyDeviceToHost);
+        for(int i = 0; i < TOTAL_ELEMENTS_O; i++) { o[i] = __bfloat162float(o_bf[i]); }
+        bool good = true;
+        std::ofstream o_ref_file("printouts/o_ref.txt");
+        std::ofstream o_file("printouts/o.txt");
+        std::ofstream diff_file("printouts/diff.txt");
+        for(int i = 0; i < TOTAL_ELEMENTS_O; i++) {
+            float diff = o[i] - o_ref[i % TOTAL_UNIQUE_ELEMENTS_O];
+            if(i < 1000) {
+                o_ref_file << o_ref[i % TOTAL_UNIQUE_ELEMENTS_O] << ' ';
+                o_file << o[i] << ' ';
+                diff_file << diff << ' ';
+            }
+            if(abs(diff) > 0.2 || isnan(diff)) {
+                good = false;
+            }
+        }
+        if(good) std::cout << "Correct out :)\n";
+        else std::cout << "Incorrect out :(\n";
+    }
+
+    // std::cout << "" << std::endl;
+    std::cout << "Average execution time: " << std::chrono::duration_cast<std::chrono::microseconds>(finish - start).count() / ITER << " us" << std::endl;
+
+    cudaFree(d_img);
+    cudaFree(d_vec);
+    cudaFree(d_img_q);
+    cudaFree(d_img_k);
+    cudaFree(d_img_mod_scale);
+    cudaFree(d_img_mod_shift);
+    cudaFree(d_o);
+
+    delete[] img, vec, img_q_ref, img_k_ref;
+    delete[] o, o_ref, o_bf;
+    delete[] img_mod_scale, img_mod_scale_bf, img_mod_shift, img_mod_shift_bf;
+    return 0;
+}
+

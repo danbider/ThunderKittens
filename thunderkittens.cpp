@@ -77,6 +77,14 @@ extern void fused_rotary(
 );
 #endif
 
+#ifdef TK_COMPILE_POINTWISE_GEMM
+extern void pointwise_gemm(
+    torch::Tensor A, 
+    torch::Tensor B, 
+    torch::Tensor C 
+);
+#endif
+
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.doc() = "ThunderKittens Kernels"; // optional module docstring
@@ -114,5 +122,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 #ifdef TK_COMPILE_FUSED_ROTARY
     m.def("fused_rotary", fused_rotary, "Kernel for rotary computation.");
 #endif
+
+
+#ifdef TK_COMPILE_POINTWISE_GEMM
+    m.def("pointwise_gemm", pointwise_gemm, "Kernel for pointwise gemm computation. Pass in A (M x K), B (K x N), and C(M x N).");
+#endif
+
 }
  

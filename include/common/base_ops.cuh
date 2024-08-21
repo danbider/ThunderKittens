@@ -141,6 +141,7 @@ template<> __device__ inline bf16   abs::op<bf16>  (const bf16 &x  ) { return __
 template<> __device__ inline bf16_2 abs::op<bf16_2>(const bf16_2 &x) { return __habs2(x);                     }
 template<> __device__ inline half   abs::op<half>  (const half &x  ) { return __habs(x);                        }
 template<> __device__ inline half_2 abs::op<half_2>(const half_2 &x) { return __habs2(x);                       }
+
 /**
  * @brief Rectified Linear Unit (ReLU) operation.
  *
@@ -160,6 +161,110 @@ template<> __device__ inline bf16   relu::op<bf16>  (const bf16 &x  ) { return _
 template<> __device__ inline bf16_2 relu::op<bf16_2>(const bf16_2 &x) { return __hmax2(x, base_types::constants<bf16_2>::zero()); }
 template<> __device__ inline half   relu::op<half>  (const half &x  ) { return __hmax(x, base_types::constants<half>::zero());    }
 template<> __device__ inline half_2 relu::op<half_2>(const half_2 &x) { return __hmax2(x, base_types::constants<half_2>::zero()); }
+
+
+/**
+ * @brief Sigmoid Linear Unit (SiLU) operation.
+ * This operation applies the SiLU function to the input, which is the
+ * pointwise multiplication of x and logistic_sigmoid(x)
+ *
+ * @tparam T The data type of the input and output values.
+ * @param x[in] The input value.
+ * @return The result of SiLU function applied to the input.
+ */
+struct silu {
+    template<typename T> static __device__ inline T op(const T &x) { 
+        return x * (
+            base_types::constants<T>::one() / ( 
+                base_types::constants<T>::one() + exp(
+                    base_types::constants<T>::neg_one() * x
+                )
+            )
+        );
+    }
+};
+template<> __device__ inline float silu::op<float> (const float &x ) { 
+    return x * (
+        base_types::constants<float>::one() / (
+            base_types::constants<float>::one() + __expf(
+                base_types::constants<float>::neg_one() * x
+            )
+        )
+    ); 
+}
+template<> __device__ inline float2 silu::op<float2> (const float2 &x ) { 
+    return float2 {
+        x.x * (
+            base_types::constants<float>::one() / (
+                base_types::constants<float>::one() + __expf(
+                    base_types::constants<float>::neg_one() * x.x
+                )
+            )
+        ), 
+        x.y * (
+            base_types::constants<float>::one() / (
+                base_types::constants<float>::one() + __expf(
+                    base_types::constants<float>::neg_one() * x.y
+                )
+            )
+        )
+    };
+}
+template<> __device__ inline bf16 silu::op<bf16>  (const bf16 &x  ) { 
+    return __hmul(
+        x, 
+        __hdiv(
+            base_types::constants<bf16>::one(), 
+            __hadd(
+                base_types::constants<bf16>::one(), 
+                hexp(
+                    __hmul(base_types::constants<bf16>::neg_one(), x)
+                )
+            )
+        )
+    ); 
+}
+template<> __device__ inline bf16_2 silu::op<bf16_2>  (const bf16_2 &x  ) { 
+    return __hmul2(
+        x, 
+        __h2div(
+            base_types::constants<bf16_2>::one(), 
+            __hadd2(
+                base_types::constants<bf16_2>::one(), 
+                h2exp(
+                    __hmul2(base_types::constants<bf16_2>::neg_one(), x)
+                ))
+        )
+    ); 
+}
+template<> __device__ inline half silu::op<half>  (const half &x  ) { 
+    return __hmul(
+        x, 
+        __hdiv(
+            base_types::constants<half>::one(), 
+            __hadd(
+                base_types::constants<half>::one(), 
+                hexp(
+                    __hmul(base_types::constants<half>::neg_one(), x)
+                ))
+        )
+    ); 
+}
+template<> __device__ inline half_2 silu::op<half_2>  (const half_2 &x  ) { 
+    return __hmul2(
+        x, 
+        __h2div(
+            base_types::constants<half_2>::one(), 
+            __hadd2(
+                base_types::constants<half_2>::one(), 
+                h2exp(
+                    __hmul2(base_types::constants<half_2>::neg_one(), x)
+                ))
+        )
+    ); 
+}
+
+
 /**
  * @brief Copy operation.
  *

@@ -227,6 +227,18 @@ __device__ static inline void relu(T &dst, const T &src) {
     unary_map<base_ops::relu, T>(dst, src);
 }
 /**
+ * @brief Applies the sigmoid linear unit (SiLU) function to each element of a tile.
+ * https://pytorch.org/docs/stable/generated/torch.nn.SiLU.html
+ *
+ * @tparam T Tile type.
+ * @param dst[out] Destination tile where the result is stored.
+ * @param src[in] Source tile to apply the SiLU function on.
+ */
+template<ducks::st::all T>
+__device__ static inline void silu(T &dst, const T &src) {
+    unary_map<base_ops::silu, T>(dst, src);
+}
+/**
  * @brief Copies the elements of the source tile to the destination tile.
  * 
  * @tparam T The type of the tile. Must satisfy the `ducks::st::all` concept.

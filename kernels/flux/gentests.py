@@ -35,17 +35,16 @@ else:
 
 def get_output(img, txt, vec, pe):
     # norm 
-    # img_modulated_init = norm1(img)
+    img_modulated_init = norm1(img)
     # txt_modulated_init = norm2(txt)
 
     # gemm
     silu_vec = nn.functional.silu(vec)
-    breakpoint()
     out_img = lin1(silu_vec)[:, None, :].chunk(multiplier, dim=-1) # 6 x [b, 1, hidden_dim] tensors
     img_mod1 = out_img[:3]  # first three tensors
 
     # math 
-    img_modulated = (1 + img_mod1[1]) * norm1(img) + img_mod1[0] # shift=0, scale=1
+    img_modulated = (1 + img_mod1[1]) * img_modulated_init + img_mod1[0] # shift=0, scale=1
 
     # gemm 
     img_qkv = img_attn_qkv(img_modulated)   # dim --> dim*3
@@ -63,7 +62,8 @@ def get_output(img, txt, vec, pe):
     rrms = torch.rsqrt(torch.mean(img_k**2, dim=-1, keepdim=True) + 1e-6)
     img_k = (img_k * rrms) * k_img_rms_norm_scale
 
-    return img_q, img_k, img_modulated, img_mod1[0], img_mod1[1]
+    # breakpoint()
+    return img_q, img_k, img_modulated, img_mod1[0][0].transpose(0,1), img_mod1[1][0].transpose(0,1)
 
 
 img_q, img_k, img_modulated_init, img_mod1_shift, img_mod1_scale = get_output(img, txt, vec, pe)

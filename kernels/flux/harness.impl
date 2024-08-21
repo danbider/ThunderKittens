@@ -158,8 +158,8 @@ int main(int argc, char **argv) {
     std::cout << "Starting kernel\n";
     const auto start = std::chrono::high_resolution_clock::now();
     for(int i = 0; i < ITER; i++) {  
-        flux_prepare<<<B,NUM_THREADS,mem_size>>>(
-            d_img, d_vec, d_img_mod_scale, d_img_mod_shift, d_o
+        flux_prepare<<<B,NUM_THREADS_NORM,mem_size>>>(
+            d_img, d_vec, d_img_mod_shift, d_img_mod_scale, d_o
         );  
     }
     cudaDeviceSynchronize();

@@ -89,7 +89,10 @@ def main(
     n_warmup_iters = 2
     print(f"Warmup iters:")
     for i in range(n_warmup_iters): 
+        t0 = time.perf_counter()
         x = denoise(model, **inp, timesteps=timesteps, guidance=opts.guidance)
+        t1 = time.perf_counter()
+        print(f"Warmup done in {t1 - t0:.1f}s")
 
     print(f"Real iters:")
     n_iters = 3

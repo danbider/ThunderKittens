@@ -238,6 +238,7 @@ using st_bf_2x4 = st_bf<2, 4>;
 using st_bf_4x1 = st_bf<4, 1>;
 using st_bf_4x2 = st_bf<4, 2>;
 using st_bf_4x4 = st_bf<4, 4>;
+using st_bf_4x16 = st_bf<4, 16>;
 using st_bf_8x1 = st_bf<8, 1>;
 
 using st_hf_1x1 = st_hf<1, 1>;

@@ -96,9 +96,16 @@ extern void fused_flux_layernorm(
 
 #ifdef TK_COMPILE_FUSED_FLUX_RMSNORM
 extern void fused_flux_rmsnorm(
-    torch::Tensor x, 
-    torch::Tensor scale, 
-    torch::Tensor out 
+    torch::Tensor img_q, 
+    torch::Tensor img_k, 
+    torch::Tensor txt_q, 
+    torch::Tensor txt_k, 
+    torch::Tensor scale_q_img, 
+    torch::Tensor scale_k_img, 
+    torch::Tensor scale_q_txt, 
+    torch::Tensor scale_k_txt, 
+    torch::Tensor out_q,
+    torch::Tensor out_k
 );
 #endif
 

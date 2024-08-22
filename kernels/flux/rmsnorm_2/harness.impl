@@ -35,16 +35,30 @@ int main(int argc, char **argv) {
     std::cout << "Entered main!" << std::endl;
 
     // Outputs
+    constexpr int TOTAL_ELEMENTS_OUTPUT_Q = B*H*(IMG_D+TXT_D)*HEAD_D;
+    constexpr int TOTAL_UNIQUE_ELEMENTS_OUTPUT_Q = H*(IMG_D+TXT_D)*HEAD_D;
+
+    constexpr int TOTAL_ELEMENTS_TXT_Q = B*H*TXT_D*HEAD_D;
+    constexpr int TOTAL_UNIQUE_ELEMENTS_TXT_Q = H*TXT_D*HEAD_D;
+
     constexpr int TOTAL_ELEMENTS_IMG_Q = B*H*IMG_D*HEAD_D;
     constexpr int TOTAL_UNIQUE_ELEMENTS_IMG_Q = H*IMG_D*HEAD_D;
-    float *img_q_ref  = new float[TOTAL_UNIQUE_ELEMENTS_IMG_Q];
-    float *img_q  = new float[TOTAL_ELEMENTS_IMG_Q]; // to store the output
-    float *rms_in_img_q_ref  = new float[TOTAL_UNIQUE_ELEMENTS_IMG_Q];
 
-    std::cout << "TOTAL_UNIQUE_ELEMENTS_IMG_Q=" << TOTAL_UNIQUE_ELEMENTS_IMG_Q << std::endl;
+    float *output_q_ref  = new float[TOTAL_UNIQUE_ELEMENTS_OUTPUT_Q];
+    float *output_k_ref  = new float[TOTAL_UNIQUE_ELEMENTS_OUTPUT_Q];
+    float *output_q  = new float[TOTAL_ELEMENTS_OUTPUT_Q]; // to store the output
+    float *output_k  = new float[TOTAL_ELEMENTS_OUTPUT_Q]; // to store the output
+
+    float *rms_in_img_q_ref  = new float[TOTAL_UNIQUE_ELEMENTS_IMG_Q];
+    float *rms_in_img_k_ref  = new float[TOTAL_UNIQUE_ELEMENTS_IMG_Q];
+    float *rms_in_txt_q_ref  = new float[TOTAL_UNIQUE_ELEMENTS_TXT_Q];
+    float *rms_in_txt_k_ref  = new float[TOTAL_UNIQUE_ELEMENTS_TXT_Q];
     
     constexpr int TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE = HEAD_D;
     float *rms_q_scale  = new float[TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE];
+    float *rms_k_scale  = new float[TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE];
+    float *rms_q_scale_txt  = new float[TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE];
+    float *rms_k_scale_txt  = new float[TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE];
 
     if(argc > 1) {
         std::ifstream infile(argv[1]);
@@ -52,45 +66,82 @@ int main(int argc, char **argv) {
         printf("Loading from %s\n", argv[1]);
         std::cout << "Starting to enter!" << std::endl;
 
-        for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE; i++) {  
-            infile >> rms_q_scale[i];  
-            // if (i < 3 ) { std::cout << "2: " << rms_q_scale[i] << std::endl; }
-        }
-        for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_IMG_Q; i++) {  
-            infile >> rms_in_img_q_ref[i];  
-            // if (i < 3 ) { std::cout << "1: " << rms_in_img_q_ref[i] << std::endl; }
-        }
-        for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_IMG_Q; i++) {  
-            infile >> img_q_ref[i];  
-            // if (i < 3 ) { std::cout << "3: " << img_q_ref[i] << std::endl; }
-        }
+        for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE; i++) {  infile >> rms_q_scale[i];  }
+        for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_IMG_Q; i++) {  infile >> rms_in_img_q_ref[i];  }
+        // for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_IMG_Q; i++) {  infile >> img_q_ref[i];  }
+
+        for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE; i++) {  infile >> rms_k_scale[i];  }
+        for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_IMG_Q; i++) {  infile >> rms_in_img_k_ref[i];  }
+        // for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_IMG_Q; i++) {  infile >> img_k_ref[i];  }
+
+        for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE; i++) {  infile >> rms_q_scale_txt[i];  }
+        for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_TXT_Q; i++) {  infile >> rms_in_txt_q_ref[i];  }
+        // for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_TXT_Q; i++) {  infile >> txt_q_ref[i];  }
+
+        for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE; i++) {  infile >> rms_k_scale_txt[i];  }
+        for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_TXT_Q; i++) {  infile >> rms_in_txt_k_ref[i];  }
+        // for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_TXT_Q; i++) {  infile >> txt_k_ref[i];  }
+
+        for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_OUTPUT_Q; i++) {  infile >> output_q_ref[i];  }
+        for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_OUTPUT_Q; i++) {  infile >> output_k_ref[i];  }
+
         std::cout << "Finished loading file from " << argv[1] << "!" << std::endl;
     }
 
     // RMS Inputs & Outputs
     bf16 *rms_in_img_q_bf = new bf16[TOTAL_ELEMENTS_IMG_Q];
     bf16 *rms_q_scale_bf = new bf16[TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE];
-    for(int i = 0; i < TOTAL_ELEMENTS_IMG_Q; i++) {
-        rms_in_img_q_bf[i] = __float2bfloat16(rms_in_img_q_ref[i % TOTAL_UNIQUE_ELEMENTS_IMG_Q]);
-        // if (i < 3) { std::cout << rms_in_img_q_ref[i % TOTAL_UNIQUE_ELEMENTS_IMG_Q] << std::endl; }
-    }
-    for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE; i++) {
-        rms_q_scale_bf[i] = __float2bfloat16(rms_q_scale[i % TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE]);
-        // if (i < 3) { std::cout << rms_q_scale[i % TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE] << std::endl; }
-    }
+    bf16 *rms_in_img_k_bf = new bf16[TOTAL_ELEMENTS_IMG_Q];
+    bf16 *rms_k_scale_bf = new bf16[TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE];
+
+    bf16 *rms_in_txt_q_bf = new bf16[TOTAL_ELEMENTS_TXT_Q];
+    bf16 *rms_q_scale_bf_txt = new bf16[TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE];
+    bf16 *rms_in_txt_k_bf = new bf16[TOTAL_ELEMENTS_TXT_Q];
+    bf16 *rms_k_scale_bf_txt = new bf16[TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE];
+
+    for(int i = 0; i < TOTAL_ELEMENTS_IMG_Q; i++) { rms_in_img_q_bf[i] = __float2bfloat16(rms_in_img_q_ref[i % TOTAL_UNIQUE_ELEMENTS_IMG_Q]);}
+    for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE; i++) { rms_q_scale_bf[i] = __float2bfloat16(rms_q_scale[i % TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE]); }
+    for(int i = 0; i < TOTAL_ELEMENTS_IMG_Q; i++) { rms_in_img_k_bf[i] = __float2bfloat16(rms_in_img_k_ref[i % TOTAL_UNIQUE_ELEMENTS_IMG_Q]);}
+    for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE; i++) { rms_k_scale_bf[i] = __float2bfloat16(rms_k_scale[i % TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE]); }
+
+    for(int i = 0; i < TOTAL_ELEMENTS_TXT_Q; i++) { rms_in_txt_q_bf[i] = __float2bfloat16(rms_in_txt_q_ref[i % TOTAL_UNIQUE_ELEMENTS_TXT_Q]);}
+    for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE; i++) { rms_q_scale_bf_txt[i] = __float2bfloat16(rms_q_scale_txt[i % TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE]); }
+    for(int i = 0; i < TOTAL_ELEMENTS_TXT_Q; i++) { rms_in_txt_k_bf[i] = __float2bfloat16(rms_in_txt_k_ref[i % TOTAL_UNIQUE_ELEMENTS_TXT_Q]);}
+    for(int i = 0; i < TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE; i++) { rms_k_scale_bf_txt[i] = __float2bfloat16(rms_k_scale_txt[i % TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE]); }
+
     bf16 *d_rms_in_img_q, *d_rms_q_scale;
     cudaMalloc(&d_rms_in_img_q, TOTAL_ELEMENTS_IMG_Q * sizeof(bf16));
     cudaMemcpy(d_rms_in_img_q, rms_in_img_q_bf, TOTAL_ELEMENTS_IMG_Q * sizeof(bf16), cudaMemcpyHostToDevice);
     cudaMalloc(&d_rms_q_scale, TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE * sizeof(bf16));
     cudaMemcpy(d_rms_q_scale, rms_q_scale_bf, TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE * sizeof(bf16), cudaMemcpyHostToDevice);
+    bf16 *d_rms_in_img_k, *d_rms_k_scale;
+    cudaMalloc(&d_rms_in_img_k, TOTAL_ELEMENTS_IMG_Q * sizeof(bf16));
+    cudaMemcpy(d_rms_in_img_k, rms_in_img_k_bf, TOTAL_ELEMENTS_IMG_Q * sizeof(bf16), cudaMemcpyHostToDevice);
+    cudaMalloc(&d_rms_k_scale, TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE * sizeof(bf16));
+    cudaMemcpy(d_rms_k_scale, rms_k_scale_bf, TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE * sizeof(bf16), cudaMemcpyHostToDevice);
 
-    bf16 *img_q_bf  = new bf16[TOTAL_ELEMENTS_IMG_Q];
-    bf16 *d_img_q;
-    cudaMalloc(&d_img_q, TOTAL_ELEMENTS_IMG_Q * sizeof(bf16));
-    cudaMemcpy(d_img_q, img_q_bf, TOTAL_ELEMENTS_IMG_Q * sizeof(bf16), cudaMemcpyHostToDevice);
+    bf16 *d_rms_in_txt_q, *d_rms_q_scale_txt;
+    cudaMalloc(&d_rms_in_txt_q, TOTAL_ELEMENTS_TXT_Q * sizeof(bf16));
+    cudaMemcpy(d_rms_in_txt_q, rms_in_txt_q_bf, TOTAL_ELEMENTS_TXT_Q * sizeof(bf16), cudaMemcpyHostToDevice);
+    cudaMalloc(&d_rms_q_scale_txt, TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE * sizeof(bf16));
+    cudaMemcpy(d_rms_q_scale_txt, rms_q_scale_bf_txt, TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE * sizeof(bf16), cudaMemcpyHostToDevice);
+    bf16 *d_rms_in_txt_k, *d_rms_k_scale_txt;
+    cudaMalloc(&d_rms_in_txt_k, TOTAL_ELEMENTS_TXT_Q * sizeof(bf16));
+    cudaMemcpy(d_rms_in_txt_k, rms_in_txt_k_bf, TOTAL_ELEMENTS_TXT_Q * sizeof(bf16), cudaMemcpyHostToDevice);
+    cudaMalloc(&d_rms_k_scale_txt, TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE * sizeof(bf16));
+    cudaMemcpy(d_rms_k_scale_txt, rms_k_scale_bf_txt, TOTAL_UNIQUE_ELEMENTS_RMS_Q_SCALE * sizeof(bf16), cudaMemcpyHostToDevice);
+
+    // Final output
+    bf16 *output_q_bf  = new bf16[TOTAL_ELEMENTS_OUTPUT_Q];
+    bf16 *output_k_bf  = new bf16[TOTAL_ELEMENTS_OUTPUT_Q];
+    bf16 *d_img_q, *d_img_k;
+    cudaMalloc(&d_img_q, TOTAL_ELEMENTS_OUTPUT_Q * sizeof(bf16));
+    cudaMemcpy(d_img_q, output_q_bf, TOTAL_ELEMENTS_OUTPUT_Q * sizeof(bf16), cudaMemcpyHostToDevice);
+    cudaMalloc(&d_img_k, TOTAL_ELEMENTS_OUTPUT_Q * sizeof(bf16));
+    cudaMemcpy(d_img_k, output_k_bf, TOTAL_ELEMENTS_OUTPUT_Q * sizeof(bf16), cudaMemcpyHostToDevice);
   
     // kernel rms norm
-    unsigned long mem_size = 8000; // have the flag tell us
+    unsigned long mem_size = 30000; // have the flag tell us
     cudaDeviceSynchronize();
     CudaCheckError();
     cudaFuncSetAttribute(
@@ -102,7 +153,11 @@ int main(int argc, char **argv) {
     std::cout << "Starting kernel\n";
     const auto start = std::chrono::high_resolution_clock::now();
     flux_rmsnorm<<<B*H,NUM_THREADS_NORM,mem_size>>>(
-        d_rms_in_img_q, d_rms_q_scale, d_img_q
+        d_rms_in_img_q, d_rms_in_img_k, 
+        d_rms_in_txt_q, d_rms_in_txt_k, 
+        d_rms_q_scale, d_rms_k_scale,
+        d_rms_q_scale_txt, d_rms_k_scale_txt, 
+        d_img_q, d_img_k
     );  
     cudaDeviceSynchronize();
     const auto finish = std::chrono::high_resolution_clock::now();
@@ -110,36 +165,67 @@ int main(int argc, char **argv) {
     std::cout << "Finished kernel\n";
     
     // check correctness
-    cudaMemcpy(img_q_bf, d_img_q, TOTAL_ELEMENTS_IMG_Q * sizeof(bf16), cudaMemcpyDeviceToHost);
-    for(int i = 0; i < TOTAL_ELEMENTS_IMG_Q; i++) { img_q[i] = __bfloat162float(img_q_bf[i]); }
+    cudaMemcpy(output_q_bf, d_img_q, TOTAL_ELEMENTS_OUTPUT_Q * sizeof(bf16), cudaMemcpyDeviceToHost);
+    for(int i = 0; i < TOTAL_ELEMENTS_OUTPUT_Q; i++) { output_q[i] = __bfloat162float(output_q_bf[i]); }
 
     bool good = true;
-    std::ofstream img_q_ref_file("printouts/img_q_ref.txt");
-    std::ofstream img_q_file("printouts/img_q.txt");
-    std::ofstream img_q_diff_file("printouts/img_q_diff.txt");
-    std::cout << "Total elements: " << TOTAL_ELEMENTS_IMG_Q << std::endl;
-    std::cout << "Total unique elements: " << TOTAL_UNIQUE_ELEMENTS_IMG_Q << std::endl;
-
-    for(int i = 0; i < TOTAL_ELEMENTS_IMG_Q; i++) {
-        float diff = img_q[i] - img_q_ref[i % TOTAL_UNIQUE_ELEMENTS_IMG_Q];
-        if(i < 1000) { // TOTAL_UNIQUE_ELEMENTS_IMG_Q
-            img_q_ref_file << img_q_ref[i % TOTAL_UNIQUE_ELEMENTS_IMG_Q] << ' ';
-            img_q_file << img_q[i] << ' ';
-            img_q_diff_file << diff << ' ';
+    std::ofstream output_q_ref_file("printouts/out_q_ref.txt");
+    std::ofstream output_q_file("printouts/out_q.txt");
+    std::ofstream output_q_diff_file("printouts/out_q_diff.txt");
+    std::cout << "Total elements: " << TOTAL_ELEMENTS_OUTPUT_Q << std::endl;
+    std::cout << "Total unique elements: " << TOTAL_UNIQUE_ELEMENTS_OUTPUT_Q << std::endl;
+    for(int i = 0; i < TOTAL_ELEMENTS_OUTPUT_Q; i++) {
+        float diff = output_q[i] - output_q_ref[i % TOTAL_UNIQUE_ELEMENTS_OUTPUT_Q];
+        if(i < 1000) { // TOTAL_UNIQUE_ELEMENTS_OUTPUT_Q
+            output_q_ref_file << output_q_ref[i % TOTAL_UNIQUE_ELEMENTS_OUTPUT_Q] << ' ';
+            output_q_file << output_q[i] << ' ';
+            output_q_diff_file << diff << ' ';
         }
-        if(abs(diff) > 0.1 || isnan(diff)) {
-            good = false;
-        }
+        if(abs(diff) > 0.1 || isnan(diff)) { good = false; }
     }
     if(good) std::cout << "Correct out :)\n";
     else std::cout << "Incorrect out :(\n";
 
+
+    cudaMemcpy(output_k_bf, d_img_k, TOTAL_ELEMENTS_OUTPUT_Q * sizeof(bf16), cudaMemcpyDeviceToHost);
+    for(int i = 0; i < TOTAL_ELEMENTS_OUTPUT_Q; i++) { output_k[i] = __bfloat162float(output_k_bf[i]); }
+
+    bool good_k = true;
+    std::ofstream output_k_ref_file("printouts/out_k_ref.txt");
+    std::ofstream output_k_file("printouts/out_k.txt");
+    std::ofstream output_k_diff_file("printouts/out_k_diff.txt");
+    std::cout << "Total elements: " << TOTAL_ELEMENTS_OUTPUT_Q << std::endl;
+    std::cout << "Total unique elements: " << TOTAL_UNIQUE_ELEMENTS_OUTPUT_Q << std::endl;
+    for(int i = 0; i < TOTAL_ELEMENTS_OUTPUT_Q; i++) {
+        float diff = output_k[i] - output_k_ref[i % TOTAL_UNIQUE_ELEMENTS_OUTPUT_Q];
+        if(i < 1000) { // TOTAL_UNIQUE_ELEMENTS_OUTPUT_Q
+            output_k_ref_file << output_k_ref[i % TOTAL_UNIQUE_ELEMENTS_OUTPUT_Q] << ' ';
+            output_k_file << output_k[i] << ' ';
+            output_k_diff_file << diff << ' ';
+        }
+        if(abs(diff) > 0.1 || isnan(diff)) { good_k = false; }
+    }
+    if(good_k) std::cout << "Correct k out :)\n";
+    else std::cout << "Incorrect k out :(\n";
+
     std::cout << "Average execution time: " << std::chrono::duration_cast<std::chrono::microseconds>(finish - start).count() << " us" << std::endl;
 
     cudaFree(d_img_q);
+    cudaFree(d_img_k);
     cudaFree(d_rms_in_img_q);
+    cudaFree(d_rms_in_img_k);
+    cudaFree(d_rms_k_scale);
     cudaFree(d_rms_q_scale);
-    delete[] img_q_ref, img_q, rms_in_img_q_ref;
+    cudaFree(d_rms_q_scale_txt);
+    cudaFree(d_rms_k_scale_txt);
+
+    delete[] output_q, output_q_ref, output_k, output_k_ref;
+    delete[] rms_in_img_q_ref, rms_in_img_q_bf;
+    delete[] rms_in_img_k_ref, rms_in_img_k_bf;
+    delete[] rms_in_txt_q_ref, rms_in_txt_q_bf;
+    delete[] rms_in_txt_k_ref, rms_in_txt_k_bf;
+    delete[] rms_q_scale, rms_k_scale, rms_q_scale_bf, rms_k_scale_bf;
+    delete[] rms_q_scale_txt, rms_k_scale_txt, rms_q_scale_bf_txt, rms_k_scale_bf_txt;
     return 0;
 }
 

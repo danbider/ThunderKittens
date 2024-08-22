@@ -41,7 +41,7 @@ def main(
     output_dir: str = "output",
     add_sampling_metadata: bool = True,
 
-    optimized=True,
+    optimized=False,
 ):
     """
     Sample the flux model. Either interactively (set `--loop`) or run for a
@@ -61,8 +61,9 @@ def main(
         seed=0,
     )
 
-    model = load_flow_model(name, device=torch.device(device))
+    model = load_flow_model(name, device=torch.device(device), use_tk=True)
     if optimized:
+        print("Torch compiling model")
         model = torch.compile(model)
 
     # denoise initial noise
@@ -85,9 +86,12 @@ def main(
 
     timesteps = get_schedule(opts.num_steps, inp["img"].shape[1], shift=(name != "flux-schnell"))
 
-    n_warmup_iters = 10
+    n_warmup_iters = 2
+    print(f"Warmup iters:")
     for i in range(n_warmup_iters): 
         x = denoise(model, **inp, timesteps=timesteps, guidance=opts.guidance)
+
+    print(f"Real iters:")
     n_iters = 3
     for i in range(n_iters):
         t0 = time.perf_counter()

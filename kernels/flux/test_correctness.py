@@ -201,9 +201,10 @@ def simplified_pytorch(img=img, txt=txt, vec=vec, pe=pe):
 
     # three [b, 1, hidden_dim] tensors per mod tensor
     out_img = lin1(nn.functional.silu(vec))[:, None, :].chunk(multiplier, dim=-1)
-    img_mod1, img_mod2 = out_img[:3], out_img[3:]         
+    img_mod1, img_mod2 = out_img[:3], out_img[3:]  
     img_modulated = norm1(img)
     img_modulated = (1 + img_mod1[1]) * img_modulated + img_mod1[0]
+
     img_qkv = img_attn_qkv(img_modulated)
     img_q, img_k, img_v = rearrange(img_qkv, "B L (K H D) -> K B H L D", K=3, H=num_heads)
 
@@ -212,6 +213,7 @@ def simplified_pytorch(img=img, txt=txt, vec=vec, pe=pe):
     img_q = (img_q * rrms) * q_img_rms_norm_scale
     rrms = torch.rsqrt(torch.mean(img_k**2, dim=-1, keepdim=True) + 1e-6)
     img_k = (img_k * rrms) * k_img_rms_norm_scale
+
 
     print(f"{img_q.shape=}, {img_k.shape=}")
 
@@ -222,8 +224,6 @@ def simplified_pytorch(img=img, txt=txt, vec=vec, pe=pe):
     txt_modulated = (1 + txt_mod1[1]) * txt_modulated + txt_mod1[0]
     txt_qkv = txt_attn_qkv(txt_modulated)
     txt_q, txt_k, txt_v = rearrange(txt_qkv, "B L (K H D) -> K B H L D", K=3, H=num_heads)
-
-    # RMS norm
     rrms = torch.rsqrt(torch.mean(txt_q**2, dim=-1, keepdim=True) + 1e-6)
     txt_q = (txt_q * rrms) * q_txt_rms_norm_scale
     rrms = torch.rsqrt(torch.mean(txt_k**2, dim=-1, keepdim=True) + 1e-6)

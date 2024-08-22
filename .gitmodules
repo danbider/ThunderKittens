@@ -1,0 +1,3 @@
+[submodule "flux_tk"]
+	path = demos/flux_demo/flux
+	url = git@github.com:simran-arora/flux.git

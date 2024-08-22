@@ -56,18 +56,14 @@ def simplified_pytorch(img=img, txt=txt, vec=vec, pe=pe):
     img_q_ref = (img_q * rrms) * q_img_rms_norm_scale
 
     img_q_tk = torch.empty_like(img_q_ref)
-    # print(img_q[0, 0, 0, :8])
-    # print(q_img_rms_norm_scale[:8])
-    # print(f"{img_q.shape}")
-    # print(f"{q_img_rms_norm_scale.shape}")
     tk.fused_flux_rmsnorm(
         img_q.to(torch.bfloat16).contiguous(), 
         q_img_rms_norm_scale.to(torch.bfloat16).contiguous(), 
         img_q_tk.to(torch.bfloat16).contiguous()
     )
     diff = torch.norm(img_q_ref - img_q_tk).max() 
-    # print(img_q_ref[0,0,0,:16])
-    # print(img_q_tk[0,0,0,:16])
+    print(img_q_ref[0,0,0,:8])
+    print(img_q_tk[0,0,0,:8])
     print(f"Diff: {diff=}")
 
     return img_q_ref

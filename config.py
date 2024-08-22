@@ -52,13 +52,26 @@ sources = {
                 'kernels/flux/pointwise_gemm.cu',
             ]
         }
+    },
+    'fused_flux_rmsnorm': {
+        'source_files': {
+            'h100': [
+                'kernels/flux/rmsnorm_2/flux.cu',
+            ]
+        }
+    },'fused_flux_layernorm': {
+        'source_files': {
+            'h100': [
+                'kernels/flux/layernorm_1/flux.cu',
+            ]
+        }
     }
 }
 
 ### WHICH KERNELS DO WE WANT TO BUILD?
 # (oftentimes during development work you don't need to redefine them all.)
 # kernels = ['attn_inference', 'attn_causal_inference', 'attn_training', 'attn_causal_training', 'hedgehog', 'fused_rotary']
-kernels = ['pointwise_gemm']
+kernels = ['fused_flux_layernorm', 'fused_flux_rmsnorm']
 
 ### WHICH GPU TARGET DO WE WANT TO BUILD FOR?
 target = 'h100'

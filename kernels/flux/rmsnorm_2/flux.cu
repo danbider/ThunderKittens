@@ -55,9 +55,6 @@ void flux_rmsnorm(
     __syncthreads();
     
     int n_blocks = IMG_D / NUM_WORKERS_NORM;
-    if (threadIdx.x == 0 && blockIdx.x == 0) { 
-            printf("n_blocks=%d\n", n_blocks);
-        }
     for (int block = 0; block < n_blocks; block ++, tic ^=1, toc ^=1) {
         barrier_cheat.arrive_and_wait();  
 
@@ -71,36 +68,27 @@ void flux_rmsnorm(
         copy(scratch_s[warpid][tic], img_s[warpid][tic]);
         mul(img_s[warpid][tic], scratch_s[warpid][tic], scratch_s[warpid][tic]); // img_q**2
         sum(mean, img_s[warpid][tic]);
-        if (threadIdx.x == 0 && block==0 && blockIdx.x == 0) { 
-            printf("mean_init=%f\n", __bfloat162float(mean));
-        }
         mean = mean / __float2bfloat16(HEAD_D);
-        if (threadIdx.x == 0 && block==0  && blockIdx.x == 0) { 
-            printf("mean_start=%f\n", __bfloat162float(mean));
-            printf("d_head_tile=%d\n", d_head_tile);
-        }
         rrms = __float2bfloat16(1 / sqrt(__bfloat162float(mean + __float2bfloat16(1e-06f))));
 
         // img_q = (img_q * rrms) * q_img_rms_norm_scale;
         mul(scratch_s[warpid][tic], scratch_s[warpid][tic], rrms);
         mul(scratch_s[warpid][tic], scratch_s[warpid][tic], rms_norm_scale_s);
 
-        if (threadIdx.x == 0 && block==0  && blockIdx.x == 0) { 
-            printf("mean_end=%f\n", __bfloat162float(mean));
-            printf("rrms_end=%f\n", __bfloat162float(rrms));
-            printf("head=%d\n", HEAD_D);
-        }
+        // if (threadIdx.x == 0 && block==0  && blockIdx.x == 0) { 
+        //     printf("mean_end=%f\n", __bfloat162float(mean));
+        //     printf("rrms_end=%f\n", __bfloat162float(rrms));
+        //     printf("head=%d\n", HEAD_D);
+        // }
 
         // save output
         store(o_g + (block*NUM_WORKERS_NORM +warpid)*HEAD_D, scratch_s[warpid][tic]); 
-        __syncthreads();
     }
 }
 
 #include "common/pyutils/torch_helpers.cuh"
 #include <iostream>
-void 
-fused_flux_rmsnorm(
+void fused_flux_rmsnorm(
     const torch::Tensor img_in, 
     const torch::Tensor rms_scale, 
     torch::Tensor out
@@ -142,7 +130,7 @@ fused_flux_rmsnorm(
     flux_rmsnorm<<<batch*heads,NUM_THREADS_NORM,mem_size>>>(
         d_rms_in_img_q, d_rms_q_scale, d_o
     );  
-
+    cudaDeviceSynchronize(); // flag
     CHECK_CUDA_ERROR(cudaGetLastError());
 }
 

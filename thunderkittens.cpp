@@ -85,6 +85,23 @@ extern void pointwise_gemm(
 );
 #endif
 
+#ifdef TK_COMPILE_FUSED_FLUX_LAYERNORM
+extern void fused_flux_layernorm(
+    torch::Tensor x, 
+    torch::Tensor shift, 
+    torch::Tensor scale,
+    torch::Tensor out
+);
+#endif
+
+#ifdef TK_COMPILE_FUSED_FLUX_RMSNORM
+extern void fused_flux_rmsnorm(
+    torch::Tensor x, 
+    torch::Tensor scale, 
+    torch::Tensor out 
+);
+#endif
+
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.doc() = "ThunderKittens Kernels"; // optional module docstring
@@ -128,5 +145,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("pointwise_gemm", pointwise_gemm, "Kernel for pointwise gemm computation. Pass in A (M x K), B (K x N), and C(M x N).");
 #endif
 
+#ifdef TK_COMPILE_FUSED_FLUX_LAYERNORM
+    m.def("fused_flux_layernorm", fused_flux_layernorm, "Kernel for fused_flux_layernorm Pass in input, scale, shift, and output tensor");
+#endif
+
+#ifdef TK_COMPILE_FUSED_FLUX_RMSNORM
+    m.def("fused_flux_rmsnorm", fused_flux_rmsnorm, "Kernel for fused_flux_rmsnorm. Pass in input, scale factor, and output tensor");
+#endif
 }
  

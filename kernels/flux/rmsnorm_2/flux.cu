@@ -75,12 +75,6 @@ void flux_rmsnorm(
         mul(scratch_s[warpid][tic], scratch_s[warpid][tic], rrms);
         mul(scratch_s[warpid][tic], scratch_s[warpid][tic], rms_norm_scale_s);
 
-        // if (threadIdx.x == 0 && block==0  && blockIdx.x == 0) { 
-        //     printf("mean_end=%f\n", __bfloat162float(mean));
-        //     printf("rrms_end=%f\n", __bfloat162float(rrms));
-        //     printf("head=%d\n", HEAD_D);
-        // }
-
         // save output
         store(o_g + (block*NUM_WORKERS_NORM +warpid)*HEAD_D, scratch_s[warpid][tic]); 
     }
@@ -130,7 +124,6 @@ void fused_flux_rmsnorm(
     flux_rmsnorm<<<batch*heads,NUM_THREADS_NORM,mem_size>>>(
         d_rms_in_img_q, d_rms_q_scale, d_o
     );  
-    cudaDeviceSynchronize(); // flag
     CHECK_CUDA_ERROR(cudaGetLastError());
 }
 

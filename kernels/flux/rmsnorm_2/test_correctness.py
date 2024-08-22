@@ -3,6 +3,7 @@ import torch
 from torch import Tensor, nn
 from einops import rearrange
 from dataclasses import dataclass
+import time
 
 import thunderkittens as tk
 
@@ -31,39 +32,59 @@ def simplified_pytorch(img=img, txt=txt, vec=vec, pe=pe):
     # Img prep
     out_img = lin1(nn.functional.silu(vec).to(torch.bfloat16))[:, None, :].chunk(multiplier, dim=-1)
     img_mod1, img_mod2 = out_img[:3], out_img[3:]  
+
+    torch.cuda.synchronize()
+    start = time.time()
     img_modulated = norm1(img.to(torch.bfloat16))
     img_modulated = (1 + img_mod1[1].to(torch.bfloat16)) * img_modulated.to(torch.bfloat16) + img_mod1[0].to(torch.bfloat16)
+    torch.cuda.synchronize()
+    end = time.time()
+    print(f"torch (s) = {end-start}")
 
+    print(f"Starting the layrnorm step.")
     img_modulated_tk = torch.empty_like(img_modulated)
+    print(f"Created an empty tensor of shape: {img_modulated_tk.shape}")
+    torch.cuda.synchronize()
+    start = time.time()
     tk.fused_flux_layernorm(
         img.to(torch.bfloat16).contiguous(), 
         img_mod1[0][0][0].to(torch.bfloat16).contiguous(), 
         img_mod1[1][0][0].to(torch.bfloat16).contiguous(),
         img_modulated_tk.to(torch.bfloat16).contiguous()
     )
+    torch.cuda.synchronize()
+    end = time.time()
+    print(f"tk (s) = {end-start}")
     diff = torch.norm(img_modulated - img_modulated_tk).max()
-    print(img_modulated.shape, img_modulated_tk.shape)
-    print(img_modulated_tk[0,0,0:16])
-    print(img_modulated[0,0,0:16])
     print(f"Diff: {diff}; TODO: Convert to floats.")
 
     # RMS norm
+    print(f"\nStarting the rmsnorm:")
     img_qkv = img_attn_qkv(img_modulated)
     img_q, img_k, img_v = rearrange(img_qkv, "B L (K H D) -> K B H L D", K=3, H=num_heads)
+
+    torch.cuda.synchronize()
+    start = time.time()
     mean = torch.mean(img_q**2, dim=-1, keepdim=True)
-    print(f"torch mean = {mean[0,0,0]}")
     rrms = torch.rsqrt(mean + 1e-6)
     img_q_ref = (img_q * rrms) * q_img_rms_norm_scale
+    torch.cuda.synchronize()
+    end = time.time()
+    print(f"torch (s) = {end-start}")
 
-    img_q_tk = torch.empty_like(img_q_ref)
+    img_q_tk = torch.empty_like(img_q_ref).to(torch.bfloat16).contiguous()
+    print(f"Created an empty tensor of shape: {img_q_tk.shape}")
+    torch.cuda.synchronize()
+    start = time.time()
     tk.fused_flux_rmsnorm(
         img_q.to(torch.bfloat16).contiguous(), 
         q_img_rms_norm_scale.to(torch.bfloat16).contiguous(), 
-        img_q_tk.to(torch.bfloat16).contiguous()
+        img_q_tk
     )
+    torch.cuda.synchronize()
+    end = time.time()
+    print(f"tk (s) = {end-start}")
     diff = torch.norm(img_q_ref - img_q_tk).max() 
-    print(img_q_ref[0,0,0,:8])
-    print(img_q_tk[0,0,0,:8])
     print(f"Diff: {diff=}")
 
     return img_q_ref

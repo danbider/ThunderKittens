@@ -2,7 +2,7 @@
 ### Tile primitives for speedy kernels
 
 <div align="center" >
-    <img src="thunderkittens.png" height=350 alt="ThunderKittens logo" style="margin-bottom:px"/> 
+    <img src="thunderkittens.png" height=350 alt="ThunderKittens logo" style="margin-bottom:px"/>
 </div>
 
 <br>
@@ -16,7 +16,7 @@ ThunderKittens is built around three key principles:
 3. Speed. Kernels written in ThunderKittens should be at least as fast as those written from scratch -- especially because ThunderKittens can do things the “right” way under the hood. We think our Flash Attention 2 implementation speaks for this point.
 
 <div align="center" >
-    <img src="attn.png" height=600 alt="Flash Attention 2, but with kittens!" style="margin-bottom:px"/> 
+    <img src="attn.png" height=600 alt="Flash Attention 2, but with kittens!" style="margin-bottom:px"/>
 </div>
 
 ThunderKittens is built from the hardware up -- we do what the silicon tells us. And modern GPUs tell us that they want to work with fairly small tiles of data. A GPU is not really a 1000x1000 matrix multiply machine (even if it is often used as such); it’s a manycore processor where each core can efficiently run ~16x16 matrix multiplies. Consequently, ThunderKittens is built around manipulating tiles of data no smaller than 16x16 values.
@@ -44,7 +44,7 @@ __global__ void attend_ker64(int n, const bf16* __restrict__ __q__, const bf16* 
 
     extern __shared__ alignment_dummy __shm[]; // this is the CUDA shared memory
     shared_allocator al((int*)&__shm[0]);
-    
+
     // K and V live in shared memory -- this is about all that will fit.
     st_bf_1x4<ducks::st_layout::swizzle> (&k_smem)[NUM_WORKERS] = al.allocate<st_bf_1x4<ducks::st_layout::swizzle>, NUM_WORKERS>();
     st_bf_1x4<ducks::st_layout::swizzle> (&v_smem)[NUM_WORKERS] = al.allocate<st_bf_1x4<ducks::st_layout::swizzle>, NUM_WORKERS>();
@@ -56,7 +56,7 @@ __global__ void attend_ker64(int n, const bf16* __restrict__ __q__, const bf16* 
     rt_fl_1x4<> o_reg;
     rt_fl_1x1<>::col_vec max_vec_last, max_vec; // these are column vectors for the attention block
     rt_fl_1x1<>::col_vec norm_vec_last, norm_vec; // these are column vectors for the attention block
-    
+
     int qo_blocks = n / (q_reg.rows*NUM_WORKERS), kv_blocks = n / (q_reg.rows*NUM_WORKERS);
 
     for(auto q_blk = 0; q_blk < qo_blocks; q_blk++) {
@@ -131,29 +131,29 @@ But ThunderKittens does use a bunch of modern stuff, so it has fairly aggressive
 
 ```
 sudo apt update
-sudo apt install gcc-10 g++-10
+sudo apt install gcc-11 g++-11
 
-sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 100 --slave /usr/bin/g++ g++ /usr/bin/g++-10
+sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 100 --slave /usr/bin/g++ g++ /usr/bin/g++-11
 
 sudo apt update
-sudo apt install clang-10
+sudo apt install clang-11
 ```
 
 If you can't find nvcc, or you experience issues where your environment is pointing to the wrong CUDA version:
 ```
 export CUDA_HOME=/usr/local/cuda-12/
-export PATH=${CUDA_HOME}/bin:${PATH} 
+export PATH=${CUDA_HOME}/bin:${PATH}
 export LD_LIBRARY_PATH=${CUDA_HOME}/lib64:$LD_LIBRARY_PATH
 ```
 
 Finally, thanks to Jordan Juravsky for putting together a quick doc on setting up a [kittens-compatible conda](https://github.com/HazyResearch/ThunderKittens/blob/main/docs/conda_setup.md).
 
 
-## Kernel Installation 
+## Kernel Installation
 
-To experiment with our existing TK kernels, specify your kernels of interest in the ``config.py`` file and then run ``python setup.py install``.  
+To experiment with our existing TK kernels, specify your kernels of interest in the ``config.py`` file and then run ``python setup.py install``.
 
-Feel free to contribute new kernels! 
+Feel free to contribute new kernels!
 
 ## Tests
 

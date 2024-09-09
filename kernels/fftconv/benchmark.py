@@ -22,7 +22,7 @@ def test_correctness(x, y, atol=1e0):
 
 B = 64
 H = 768
-repeats = 10
+repeats = 1
 torch.random.manual_seed(42)
 dtype = torch.bfloat16
 device = 'cuda'
@@ -55,7 +55,7 @@ for b in [B // 2, B]:
             torch_time = (time.time() - start)*1e3/repeats
 
             y_flashfft = conv_flashfft(u, k)
-            #test_correctness(y_flashfft, y_torch)
+            # test_correctness(y_flashfft, y_torch)
             torch.cuda.synchronize()
             start = time.time()
             for _ in range(repeats):
@@ -63,8 +63,8 @@ for b in [B // 2, B]:
             torch.cuda.synchronize()
             flashfft_time = (time.time() - start)*1e3/repeats
 
-            y_tk = conv_tk_H100(u, k)
-            #test_correctness(y_tk, y_torch)
+            # y_tk = conv_tk_H100(u, k)
+            # test_correctness(y_tk, y_torch)
             torch.cuda.synchronize()
             start = time.time()
             for _ in range(repeats):
@@ -74,13 +74,19 @@ for b in [B // 2, B]:
 
 
             y_tk_4090 = conv_tk_4090(u, k)
-            #test_correctness(y_tk, y_torch)
+            # test_correctness(y_tk_4090, y_torch)
             torch.cuda.synchronize()
             start = time.time()
             for _ in range(repeats):
                 y_tk_4090 = conv_tk_4090(u, k)
             torch.cuda.synchronize()
             tk_time_4090 = (time.time() - start)*1e3/repeats
+
+            # breakpoint()
+            # print(f"{y_tk_4090[0, 0, :4]}")
+            # # print(f"{y_tk[0, 0, :4]}")
+            # print(f"{y_cuda[0, 0, :4]}")
+            # print(f"{y_torch[0, 0, :4]}")
 
             flashfft_speedup = torch_time / flashfft_time
             tk_speedup = torch_time / tk_time

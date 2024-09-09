@@ -7,7 +7,7 @@ using namespace kittens;
 
 #define N 1024
 #define N1 32
-#define B 64
+#define B 16
 #define H 64
 #define TOTAL_INPUT_ELEMENTS B*H*N
 
@@ -38,10 +38,23 @@ bool check_value(float abs_tol, float rel_tol, float *o, float *o_ref, int num_e
     std::ofstream diff_file("./printouts/diff.txt");
     bool good = true;
     int num_printed = 0;
+    int num_nans = 0;
+    int num_infs = 0; 
     for (size_t i = 0; i < num_elements; i++) {
         float pred = o[i];
         float actual = o_ref[i];
         float diff = abs(pred - actual);
+        bool has_nan = isnan(diff);
+        bool has_inf = isinf(pred);
+        if (has_nan) {
+            num_nans += 1;
+            good = false;
+        }
+        if (has_inf) {
+            num_infs += 1;
+            good = false;
+        }
+
         o_ref_file << o_ref[i] << ' ';
         o_file << o[i] << ' ';
         diff_file << diff << ' ';
@@ -57,6 +70,8 @@ bool check_value(float abs_tol, float rel_tol, float *o, float *o_ref, int num_e
         }
     }
     std::cout << diff_counter << " elements out of " << num_elements << " violate threshold" << std::endl;
+    std::cout << num_nans << " elements out of " << num_elements << " have nans" << std::endl;
+    std::cout << num_infs << " elements out of " << num_elements << " have infs" << std::endl;
     return good;
 }
 
@@ -218,12 +233,12 @@ int main(int argc, char **argv) {
     constexpr float abs_tol = 1.0e-0f;
     constexpr float rel_tol = 1.0e-1f;
 
-    // std::cout << "Total output elements: " << TOTAL_INPUT_ELEMENTS << std::endl;
-    // if (check_value(abs_tol, rel_tol, o, o_ref, TOTAL_INPUT_ELEMENTS)) {
-    //     std::cout << "Correctness Test PASSED" << std::endl;
-    // } else {
-    //     std::cout << "Correctness Test FAILED" << std::endl;
-    // }
+    std::cout << "Total output elements: " << TOTAL_INPUT_ELEMENTS << std::endl;
+    if (check_value(abs_tol, rel_tol, o, o_ref, TOTAL_INPUT_ELEMENTS)) {
+        std::cout << "Correctness Test PASSED" << std::endl;
+    } else {
+        std::cout << "Correctness Test FAILED" << std::endl;
+    }
 
     delete[] o_ref, o;
     delete[] o_bf;

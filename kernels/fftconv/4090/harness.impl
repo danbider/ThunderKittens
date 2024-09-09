@@ -3,7 +3,6 @@
 #include <stdlib.h>
 
 #include <fstream>
-using namespace kittens;
 
 #define N 1024
 #define N1 32
@@ -30,21 +29,6 @@ inline void __cudaCheckError( const char *file, const int line ) {
         exit( -1 );
     }
 }
-
-// // Function to calculate the number of floating-point operations
-// long long flops(int batch, int seqlen, int k, int channels) {
-//     long long f = batch * static_cast<long long>(seqlen) * k * channels;
-
-//     return f;
-// }
-
-// // Function to calculate the efficiency in teraflops
-// double efficiency(long long flop, double time) {
-//     // Convert flop to teraflops and time to milliseconds
-//     double tflops = flop / 1e12;
-//     double time_ms = time / 1e6;
-//     return tflops / time_ms;
-// }
 
 bool check_value(float abs_tol, float rel_tol, float *o, float *o_ref, int num_elements) {
     int diff_counter = 0;
@@ -195,17 +179,13 @@ int main(int argc, char **argv) {
         exit(1);
     }
 
-    // H tiles worth of mem, its 1 2x2 ST wide
-    const CUtensorMap* tma_kf_real = tma::allocate_and_create_tensor_map<tile_smem_bf_2x2>(d_kf_real, H);
-    const CUtensorMap* tma_kf_imag = tma::allocate_and_create_tensor_map<tile_smem_bf_2x2>(d_kf_imag, H);
-
     cudaStream_t stream;
     cudaStreamCreate(&stream);
     std::cout << "Starting kernel\n";
     cudaDeviceSynchronize();
     const auto start = std::chrono::high_resolution_clock::now();
     launch_fftconv_tk(
-        d_u_real, d_u_imag, tma_kf_real, tma_kf_imag, 
+        d_u_real, d_u_imag, d_kf_real, d_kf_imag, 
         d_f_real, d_f_imag, d_finv_real, d_finv_imag,
         d_tw_real, d_tw_imag, d_twinv_real, d_twinv_imag, d_o,
         B, H, N, N1
@@ -231,14 +211,8 @@ int main(int argc, char **argv) {
         std::cout << "Correctness Test FAILED" << std::endl;
     }
 
-    // calculate efficiency
-    //long long f = flops(BATCH, INPUT, K, CHANNELS);
-    //double e = efficiency(f, std::chrono::duration_cast<std::chrono::microseconds>(finish - start).count());
-    //std::cout << "Efficiency: " << e << " TFLOPS" << std::endl;
-
     delete[] o_ref, o;
     delete[] o_bf;
-
     cudaFree(d_u_real);
     cudaFree(d_u_imag);
     cudaFree(d_kf_real);

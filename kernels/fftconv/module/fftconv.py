@@ -4,6 +4,7 @@ import sys
 
 sys.path.append("../kernel")
 import fftconv_tk as mod
+import fftconv_tk_h100 as mod_h100
 
 def fft_matrix(N):
     n = torch.arange(N)
@@ -34,7 +35,7 @@ def compute_twiddle_factors_ifft(n, m):
     return M
 
 class TKFFTConv(torch.nn.Module):
-    def __init__(self, seqlen=1024, dtype=torch.bfloat16):
+    def __init__(self, seqlen=1024, dtype=torch.bfloat16, use_h100=True):
         super().__init__()
         assert dtype == torch.bfloat16
 
@@ -66,6 +67,8 @@ class TKFFTConv(torch.nn.Module):
         twinv_imag = twinv.imag.to(dtype).contiguous()
         self.register_buffer('twinv_real', twinv_real)
         self.register_buffer('twinv_imag', twinv_imag)
+
+        self.use_h100 = use_h100
     
     def forward(self, u, k):
         B, H, L = u.shape
@@ -80,12 +83,20 @@ class TKFFTConv(torch.nn.Module):
         kfT_real = k_fT.real.to(self.dtype).contiguous()
         kfT_imag = k_fT.imag.to(self.dtype).contiguous()
 
-        out = mod.fftconv_tk(
-            u_real, u_imag, kfT_real, kfT_imag, 
-            self.f_real, self.f_imag, self.finv_real, self.finv_imag,
-            self.tw_real, self.tw_imag, self.twinv_real, self.twinv_imag,
-            B, H, self.N, self.N1
-        )
+        if self.use_h100:
+            out = mod_h100.fftconv_tk_h100(
+                u_real, u_imag, kfT_real, kfT_imag, 
+                self.f_real, self.f_imag, self.finv_real, self.finv_imag,
+                self.tw_real, self.tw_imag, self.twinv_real, self.twinv_imag,
+                B, H, self.N, self.N1
+            )
+        else:
+            out = mod.fftconv_tk(
+                u_real, u_imag, kfT_real, kfT_imag, 
+                self.f_real, self.f_imag, self.finv_real, self.finv_imag,
+                self.tw_real, self.tw_imag, self.twinv_real, self.twinv_imag,
+                B, H, self.N, self.N1
+            )
 
         return out.reshape(B, H, self.N).contiguous()
 

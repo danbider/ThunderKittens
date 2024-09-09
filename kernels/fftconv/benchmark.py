@@ -29,7 +29,8 @@ device = 'cuda'
 
 results = PrettyTable()
 results.set_style(PLAIN_COLUMNS)
-results.field_names = ["B", "H", "L", "Torch (ms)", "FlashFFT (ms)", "TK (ms)", "FlashFFT Speedup", "TK Speedup"]
+results.field_names = ["B", "H", "L", "Torch (ms)", "FlashFFT (ms)", "TK (ms)", "TK 4090 (ms)", "FlashFFT x", "TK x", "TK 4090 x"]
+print(f"{len(results.field_names)}")
 
 for b in [B // 2, B]:
     for h in [H // 4, H // 2, H]:
@@ -41,7 +42,8 @@ for b in [B // 2, B]:
             u = torch.randn((b, h, N), dtype=dtype).to(device)
             # Needs to be fp32 so we can take its FFT
             k = torch.randn((h, N), dtype=torch.float32).to(device)
-            conv_tk = TKFFTConv(seqlen, dtype=dtype).to(device)
+            conv_tk_H100 = TKFFTConv(seqlen, dtype=dtype).to(device)
+            conv_tk_4090 = TKFFTConv(seqlen, dtype=dtype, use_h100=False).to(device)
             conv_flashfft = FlashFFTConv(seqlen, dtype=dtype).to(device)
             
             y_torch = ref_fftconv(u, k, N)
@@ -61,21 +63,30 @@ for b in [B // 2, B]:
             torch.cuda.synchronize()
             flashfft_time = (time.time() - start)*1e3/repeats
 
-            y_tk = conv_tk(u, k)
+            y_tk = conv_tk_H100(u, k)
             #test_correctness(y_tk, y_torch)
             torch.cuda.synchronize()
             start = time.time()
             for _ in range(repeats):
-                y_tk = conv_tk(u, k)
+                y_tk = conv_tk_H100(u, k)
             torch.cuda.synchronize()
             tk_time = (time.time() - start)*1e3/repeats
 
+
+            y_tk_4090 = conv_tk_4090(u, k)
+            #test_correctness(y_tk, y_torch)
+            torch.cuda.synchronize()
+            start = time.time()
+            for _ in range(repeats):
+                y_tk_4090 = conv_tk_4090(u, k)
+            torch.cuda.synchronize()
+            tk_time_4090 = (time.time() - start)*1e3/repeats
+
             flashfft_speedup = torch_time / flashfft_time
             tk_speedup = torch_time / tk_time
+            tk_speedup_4090 = torch_time / tk_time_4090
 
-            results.add_row([b, h, seqlen, torch_time, flashfft_time, tk_time, flashfft_speedup, tk_speedup])
-            #print(f"{b}\t{h}\t{seqlen}\t{torch_time:.2f}\t{flashfft_time:.2f}\t{tk_time:.2f}\t{flashfft_speedup:,.2f}x\t{tk_speedup:,.2f}x")
-            #print(f"B: {b}, H: {h}, L: {seqlen}\n\tTorch: {torch_time:.2f} us, FlashFFT: {flashfft_time:.2f} us, TK: {tk_time:.2f} us\n\tFlashFFT Speedup: {flashfft_speedup:,.2f}x, TK Speedup: {tk_speedup:,.2f}x")
+            results.add_row([b, h, seqlen, torch_time, flashfft_time, tk_time, tk_time_4090, flashfft_speedup, tk_speedup, tk_speedup_4090])
 
 results.float_format = "0.2"
 print(results)
